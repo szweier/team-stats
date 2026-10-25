@@ -181,6 +181,23 @@ select.control {
 .btn:active { transform: scale(0.98); }
 .btn[disabled] { opacity: 0.6; cursor: default; }
 .lock .err { color: #ff8a80; min-height: 1.4em; margin-top: 4px; font-size: 14px; }
+.team-list { display: grid; gap: 8px; margin: -8px 0 22px; text-align: left; }
+.team-item { display: flex; align-items: center; gap: 6px; }
+.team-item a {
+  flex: 1; display: block; padding: 14px 16px; border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #fff; font: 800 18px/1.2 var(--round); text-decoration: none;
+}
+.team-item a:hover { background: rgba(255, 255, 255, 0.14); }
+.team-item a::after { content: "›"; float: right; color: var(--optic); }
+.team-item .forget { background: none; border: 0; color: rgba(255, 255, 255, 0.4); font-size: 24px; cursor: pointer; padding: 6px 8px; }
+.lock .or { margin: 4px 0 12px; font-size: 14px; }
+.lock .fine { margin-top: 28px; font-size: 13px; }
+.lock .fine a { color: rgba(255, 255, 255, 0.55); }
+.tabs .teams-link {
+  flex: 0 0 auto; padding: 10px 4px 12px; white-space: nowrap;
+  color: rgba(255, 255, 255, 0.55); font: 600 13px/1 var(--round); border: 0;
+}
 
 /* ---------- Live game ---------- */
 

@@ -1,14 +1,16 @@
 // Team stats website for Slow Pitch Book.
 //
-// The app publishes each game to Firestore under statbooks/{boardKey}, where boardKey is the SHA-256
-// of "slowpitchbook:" + the team password (see Publisher.swift). Teammates type the same password
-// here; the page computes the same key and reads that team's games. Nothing else is needed.
+// Every team has its own page: the app publishes each game to Firestore under teams/{teamId}, and the
+// team's link is this site with ?t={teamId} (see Publisher.swift). The id is long and random, so the
+// link is what grants access. Teams you've opened are remembered so you can switch between them.
 
 (() => {
   "use strict";
 
   const cfg = window.STATBOOK_CONFIG || {};
-  const DEMO = new URLSearchParams(location.search).has("demo");
+  const params = new URLSearchParams(location.search);
+  const DEMO = params.has("demo");
+  const TEAM = DEMO ? "demo" : (params.get("t") || "").replace(/[^A-Za-z0-9]/g, "");
   const REFRESH_MS = 20000;
   const app = document.getElementById("app");
 
@@ -162,14 +164,19 @@
 
   // ---------- Data ----------
 
-  async function boardKey(password) {
-    // Same as the app: trim spaces/tabs (Swift's .whitespaces), SHA-256, lowercase hex.
-    const text = "slowpitchbook:" + password.replace(/^[\p{Zs}\t]+|[\p{Zs}\t]+$/gu, "");
-    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
-  }
-
   const configured = () => DEMO || (cfg.projectId && cfg.apiKey && !/^YOUR-/.test(cfg.projectId) && !/^YOUR-/.test(cfg.apiKey));
+
+  /// Teams opened on this device: [{ id, name }], most recent first.
+  function rememberedTeams() {
+    try { return JSON.parse(storage.get("statbook.teams") || "[]").filter(t => t && t.id); } catch { return []; }
+  }
+  function rememberTeam(id, name) {
+    storage.set("statbook.teams", JSON.stringify([{ id, name }, ...rememberedTeams().filter(t => t.id !== id)].slice(0, 12)));
+  }
+  function forgetTeam(id) {
+    storage.set("statbook.teams", JSON.stringify(rememberedTeams().filter(t => t.id !== id)));
+  }
+  const teamURL = id => `${location.pathname}?t=${encodeURIComponent(id)}`;
 
   async function firestore(path, query) {
     const url = new URL(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cfg.projectId)}/databases/(default)/documents/${path}`);
@@ -196,21 +203,21 @@
     return demoData;
   }
 
-  /// Loads the board and all its games. Returns false when no team matches the key.
-  async function load(key) {
+  /// Loads a team and all its games. Returns false when no team has that id.
+  async function load(teamId) {
     let board, games;
     if (DEMO) {
       const d = await loadDemo();
       board = d.board;
       games = d.games;
     } else {
-      const doc = await firestore(`statbooks/${key}`);
+      const doc = await firestore(`teams/${teamId}`);
       if (!doc) return false;
       board = { name: doc.fields?.name?.stringValue || "Team Stats" };
       games = [];
       let pageToken;
       do {
-        const page = await firestore(`statbooks/${key}/games`, { pageSize: 300, pageToken });
+        const page = await firestore(`teams/${teamId}/games`, { pageSize: 300, pageToken });
         for (const d of page?.documents || []) {
           try { games.push(JSON.parse(d.fields.json.stringValue)); } catch { /* skip a damaged game */ }
         }
@@ -220,7 +227,7 @@
     games.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     const signature = JSON.stringify([board, games]);
     const changed = signature !== state.signature;
-    Object.assign(state, { key, board, games, signature, updated: new Date() });
+    Object.assign(state, { key: teamId, board, games, signature, updated: new Date() });
     return changed ? "changed" : "same";
   }
 
@@ -228,7 +235,7 @@
     if (state.books[id]) return;
     state.books[id] = "loading";
     try {
-      const doc = DEMO ? null : await firestore(`statbooks/${state.key}/books/${encodeURIComponent(id)}`);
+      const doc = DEMO ? null : await firestore(`teams/${state.key}/books/${encodeURIComponent(id)}`);
       const jpeg = doc?.fields?.jpeg?.stringValue;
       state.books[id] = jpeg ? `data:image/jpeg;base64,${jpeg}` : "none";
     } catch {
@@ -372,58 +379,44 @@
 
   // ---------- Views ----------
 
-  function lockView(message) {
-    const input = h("input", {
-      type: "password", placeholder: "Team password", autocomplete: "current-password",
-      "aria-label": "Team password", required: true,
-    });
+  /// No team in the link: your remembered teams, or how to get a link.
+  function landingView(message) {
+    const teams = rememberedTeams();
+    const input = h("input", { type: "url", placeholder: "Paste a team link", "aria-label": "Team link", required: true });
     const err = h("div", { class: "err", role: "alert" }, message || "");
-    const button = h("button", { class: "btn", type: "submit" }, "Open Stats");
     const form = h("form", {
-      onsubmit: async e => {
+      onsubmit: e => {
         e.preventDefault();
-        if (!input.value.trim()) return;
-        button.disabled = true;
-        button.textContent = "Opening…";
-        err.textContent = "";
-        try {
-          const key = await boardKey(input.value);
-          const ok = await load(key);
-          if (!ok) {
-            err.textContent = "That password didn't match a team. Check with your scorer.";
-          } else {
-            storage.set("statbook.key", key);
-            render();
-            startRefresh();
-            return;
-          }
-        } catch (e2) {
-          err.textContent = e2.message || "Couldn't reach the stats server.";
-        }
-        button.disabled = false;
-        button.textContent = "Open Stats";
+        const text = input.value.trim();
+        let id = "";
+        try { id = new URL(text, location.href).searchParams.get("t") || ""; } catch { /* not a link */ }
+        if (!id && /^[A-Za-z0-9]{16,}$/.test(text)) id = text;
+        if (id) location.href = teamURL(id);
+        else err.textContent = "That doesn't look like a team link. Ask your scorer to share it from the app.";
       },
-    }, input, button, err);
+    }, input, h("button", { class: "btn", type: "submit" }, "Open Team"), err);
     app.replaceChildren(h("div", { class: "lock" }, h("div", { class: "panel" },
       h("img", { src: "apple-touch-icon.png", alt: "" }),
       h("h1", null, "Team Stats"),
-      h("p", null, configured()
-        ? "Enter the team password from your scorer."
-        : "This site isn't set up yet: fill in public/config.js with your Firebase project ID and web API key."),
-      configured() ? form : null)));
-    if (configured()) setTimeout(() => input.focus(), 50);
+      configured()
+        ? [
+            h("p", null, teams.length ? "Your teams" : "Open the link your team's scorer shared from the Slow Pitch Book app."),
+            teams.length ? h("div", { class: "team-list" }, teams.map(t => h("div", { class: "team-item" },
+              h("a", { href: teamURL(t.id) }, t.name || "Team"),
+              h("button", {
+                type: "button", class: "forget", "aria-label": `Remove ${t.name || "team"} from this list`,
+                onclick: () => { forgetTeam(t.id); landingView(); },
+              }, "×")))) : null,
+            teams.length ? h("p", { class: "or" }, "Or open another team") : null,
+            form,
+          ]
+        : h("p", null, "This site isn't set up yet: fill in public/config.js with your Firebase project ID and web API key."),
+      h("p", { class: "fine" }, h("a", { href: "privacy.html" }, "Privacy")))));
   }
 
   function shell(current, content) {
     const finals = state.games.filter(g => g.isFinal);
     const tab = (name, href, label) => h("a", { href, class: current === name ? "on" : null }, label);
-    const signOut = () => {
-      storage.set("statbook.key", null);
-      Object.assign(state, { key: null, board: null, games: [], signature: "", books: {} });
-      stopRefresh();
-      location.hash = "";
-      lockView();
-    };
     return [
       h("header", { class: "topbar" }, h("div", { class: "wrap" },
         h("div", { class: "brand" },
@@ -436,7 +429,7 @@
         h("nav", { class: "tabs", "aria-label": "Sections" },
           tab("games", "#/", "Games"), tab("stats", "#/stats", "Season Stats"), tab("spray", "#/spray", "Spray Charts"),
           h("span", { class: "spacer" }),
-          h("button", { class: "link", type: "button", onclick: signOut }, "Sign out")))),
+          DEMO ? null : h("a", { class: "teams-link", href: location.pathname }, "My Teams")))),
       h("main", { class: "wrap" }, content,
         h("div", { class: "foot" },
           state.updated ? `Updated ${state.updated.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · ` : "",
@@ -641,7 +634,7 @@
   // ---------- Render & refresh ----------
 
   function render() {
-    if (!state.key) return lockView();
+    if (!state.key) return landingView();
     const r = route();
     const y = window.scrollY;
     const content = r.name === "game" ? gameView(r.id) : r.name === "stats" ? statsView() : r.name === "spray" ? sprayView() : gamesView();
@@ -664,17 +657,19 @@
   window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
 
   async function start() {
-    if (!configured()) return lockView();
-    const saved = DEMO ? "demo" : storage.get("statbook.key");
-    if (!saved) return lockView();
+    if (!configured() || !TEAM) return landingView();
     app.replaceChildren(h("div", { class: "lock" }, h("div", { class: "panel" }, h("p", null, "Loading stats…"))));
     try {
-      const ok = await load(saved);
-      if (!ok) { storage.set("statbook.key", null); return lockView("The team password changed. Enter the new one."); }
+      const ok = await load(TEAM);
+      if (!ok) {
+        forgetTeam(TEAM);
+        return landingView("That team link didn't open a team. It may have been deleted; ask your scorer for a new link.");
+      }
+      if (!DEMO) rememberTeam(TEAM, state.board?.name);
       render();
       startRefresh();
     } catch (e) {
-      lockView(e.message || "Couldn't reach the stats server.");
+      landingView(e.message || "Couldn't reach the stats server.");
     }
   }
 
