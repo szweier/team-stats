@@ -235,6 +235,10 @@
         ? "That sign-in link expired or was already used. Send yourself a new one."
         : m.includes("INVALID_EMAIL") ? "That email address doesn't look right."
         : m.includes("OPERATION_NOT_ALLOWED") ? "Email sign-in isn't turned on for this site yet."
+        // The site's daily allowance of sign-in emails is used up (shared by everyone), or one person asked too often.
+        : m.includes("QUOTA_EXCEEDED") ? "Too many sign-in emails have been sent today. Try again tomorrow, or ask your team's manager."
+        : m.includes("TOO_MANY_ATTEMPTS") ? "Too many tries in a row. Wait a few minutes, then send yourself a new link."
+        : m.includes("UNAUTHORIZED_DOMAIN") ? "Sign-in isn't set up for this web address yet."
         : `Sign-in didn't work (${m}).`);
     }
     return j;
@@ -325,7 +329,6 @@
     const bytes = crypto.getRandomValues(new Uint32Array(length));
     return [...bytes].map(b => alphabet[b % alphabet.length]).join("");
   }
-  const newTeamId = () => randomCode(22, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
   const newCode = () => randomCode(12, "ABCDEFGHJKLMNPQRSTUVWXYZ23456789");
   const showCode = c => (c || "").replace(/(.{4})(?=.)/g, "$1-");
   const now = () => Math.floor(Date.now() / 1000);
@@ -377,16 +380,6 @@
   async function becomeMember(teamId, teamName) {
     await setDoc(`teams/${teamId}/members/${me()}`, { name: state.profile.name, joinedAt: now() });
     await addToMyTeams(teamId, teamName);
-  }
-
-  async function createTeam(name) {
-    const teamId = newTeamId(), scorerCode = newCode(), inviteCode = newCode();
-    await setDoc(`teams/${teamId}`, { name, members: [me()], managers: [me()], editors: [], updatedAt: now() }, { exists: false });
-    await setDoc(`scorerCodes/${scorerCode}`, { teamId, createdAt: now() }, { exists: false });
-    await setDoc(`invites/${inviteCode}`, { teamId, teamName: name, createdAt: now() }, { exists: false });
-    await setDoc(`teams/${teamId}/private/settings`, { scorerCode, inviteCode });
-    await becomeMember(teamId, name);
-    return teamId;
   }
 
   async function joinWithInvite(code) {
@@ -770,7 +763,6 @@
 
   function homeView() {
     const teams = Object.entries(state.profile.teams || {}).sort((a, b) => a[1].localeCompare(b[1]));
-    const create = h("input", { type: "text", placeholder: "Team name", maxlength: "80", required: true, "aria-label": "New team name" });
     const code = h("input", { type: "text", placeholder: "ABCD-EFGH-JKLM", required: true, "aria-label": "Scorer code", autocapitalize: "characters" });
     app.replaceChildren(panel(
       h("h1", null, state.profile.name ? `Hi, ${state.profile.name.split(" ")[0]}` : "Your teams"),
@@ -778,12 +770,10 @@
       teams.length
         ? [h("p", null, "Your teams"), h("div", { class: "team-list" }, teams.map(([id, name]) =>
             h("div", { class: "team-item" }, h("a", { href: `${SITE}?t=${id}` }, name || "Team"))))]
-        : h("p", null, "You're not on a team yet. Open the invite link from your team's manager, or start a team below."),
-      h("details", { class: "fold" }, h("summary", null, "Start a new team"),
-        h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await createTeam(create.value.trim()); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
-          create, h("button", { class: "btn", type: "submit" }, "Create Team"))),
-      h("details", { class: "fold" }, h("summary", null, "Keep score in the app? Add that team"),
-        h("p", { class: "or" }, "In Slow Pitch Book, open Settings → Team websites → your team, and enter its scorer code here. You'll become the team's manager."),
+        : h("p", null, "You're not on a team yet. Ask your team's manager to send you the team's invite link, then open it to join."),
+      // Teams start in the Slow Pitch Book app; its scorer code brings a team here and makes you its manager.
+      h("details", { class: "fold" }, h("summary", null, "Scorers: add a team from the app"),
+        h("p", { class: "or" }, "Teams are created in the Slow Pitch Book app. There, open Settings → Team websites → your team → Create Website, then tap Set Up Team on Website, or enter the team's scorer code here. You'll become the team's manager."),
         h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await claimWithScorerCode(code.value); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
           code, h("button", { class: "btn", type: "submit" }, "Add Team"))),
       h("p", { class: "or" }, `Signed in as ${session.email} · `,
