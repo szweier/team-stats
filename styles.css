@@ -96,6 +96,9 @@ h2.section {
   color: var(--muted);
   margin: 28px 0 10px;
 }
+h2.section { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+h2.section .rec { margin-left: auto; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+.pill.tourney { background: var(--accent); color: #fff; letter-spacing: 0.04em; }
 
 .card {
   background: var(--card);

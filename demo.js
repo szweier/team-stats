@@ -640,7 +640,9 @@ window.STATBOOK_DEMO = {
     "outs": 2,
     "batter": "Alex",
     "third": "Jordan"
-   }
+   },
+   "event": "Fall 2026",
+   "eventKind": "season"
   },
   {
    "id": "4A3ADF99-34B3-FF60-C26E-7A4287F53DDD",
@@ -1585,7 +1587,9 @@ window.STATBOOK_DEMO = {
      "text": "Casey \u2013 Ground out to SS (inning ended)"
     }
    ],
-   "outcome": "W"
+   "outcome": "W",
+   "event": "Fall 2026",
+   "eventKind": "season"
   },
   {
    "id": "F3308CE5-00EB-4E11-28B8-8073065B8C35",
@@ -2296,7 +2300,9 @@ window.STATBOOK_DEMO = {
      "text": "Kai \u2013 Fly out to RF (inning ended)"
     }
    ],
-   "outcome": "L"
+   "outcome": "L",
+   "event": "Labor Day Classic",
+   "eventKind": "tournament"
   }
  ]
 };

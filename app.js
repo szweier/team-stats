@@ -30,6 +30,7 @@
     statsTeam: "",
     sprayPlayer: "",
     sprayGame: "",
+    event: storage.get("statbook.event") || "",   // season / tournament filter ("" = all, "none" = no season)
     gamePlayer: {},       // game id -> player shown on that game's spray chart
   };
 
@@ -66,6 +67,55 @@
     return d ? d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "";
   };
   const title = g => (g.opponent ? (g.isHome ? "vs " : "@ ") + g.opponent : "Game");
+
+  // ---------- Seasons & tournaments (set per game in the app) ----------
+
+  const eventKey = g => (g.event ? `${g.eventKind || "season"}|${g.event.toLowerCase()}` : "none");
+  const eventLabel = e => (e.kind === "tournament" ? `${e.name} (Tournament)` : e.name);
+
+  /// Seasons and tournaments in the order of their most recent game.
+  function eventsOf(games) {
+    const seen = new Map();
+    for (const g of games) {
+      if (g.event && !seen.has(eventKey(g))) seen.set(eventKey(g), { key: eventKey(g), name: g.event, kind: g.eventKind || "season" });
+    }
+    return [...seen.values()];
+  }
+
+  /// The chosen filter, or "" if it no longer matches any game.
+  function currentEvent() {
+    if (!state.event) return "";
+    if (state.event === "none") return state.games.some(g => !g.event) ? "none" : "";
+    return state.games.some(g => eventKey(g) === state.event) ? state.event : "";
+  }
+
+  const inEvent = g => !currentEvent() || eventKey(g) === currentEvent();
+
+  function currentEventLabel() {
+    const key = currentEvent();
+    if (!key) return "";
+    if (key === "none") return "No season";
+    const e = eventsOf(state.games).find(x => x.key === key);
+    return e ? eventLabel(e) : "";
+  }
+
+  /// Season / tournament dropdown, or nothing when no game has one.
+  function eventSelect() {
+    const events = eventsOf(state.games);
+    if (!events.length) return null;
+    const key = currentEvent();
+    const option = (value, text) => { const o = h("option", { value }, text); if (value === key) o.selected = true; return o; };
+    const seasons = events.filter(e => e.kind !== "tournament");
+    const tournaments = events.filter(e => e.kind === "tournament");
+    return h("select", {
+      class: "control", "aria-label": "Season or tournament",
+      onchange: e => { state.event = e.target.value; storage.set("statbook.event", state.event || null); render(); },
+    },
+      option("", "All seasons & tournaments"),
+      seasons.length ? h("optgroup", { label: "Seasons" }, seasons.map(e => option(e.key, e.name))) : null,
+      tournaments.length ? h("optgroup", { label: "Tournaments" }, tournaments.map(e => option(e.key, e.name))) : null,
+      state.games.some(g => !g.event) ? option("none", "No season") : null);
+  }
   const us = g => g.team || "Us";
   const them = g => g.opponent || "Them";
   const rate = x => { const s = (x || 0).toFixed(3); return s.startsWith("0.") ? s.slice(1) : s; };
@@ -421,7 +471,6 @@
 
   function gamesView() {
     const live = state.games.filter(g => !g.isFinal);
-    const finals = state.games.filter(g => g.isFinal);
     const row = g => h("a", { class: "game-row", href: `#/game/${encodeURIComponent(g.id)}` },
       h("span", { class: `badge ${g.isFinal ? (g.outcome || "T") : "LIVE"}` }, g.isFinal ? (g.outcome || "T") : "LIVE"),
       h("div", null,
@@ -429,13 +478,28 @@
         h("div", { class: "when" }, [g.team, fmtDate(g.date)].filter(Boolean).join(" · "))),
       h("span", { class: "sc" }, `${g.us}–${g.them}`),
       h("span", { class: "chev", "aria-hidden": "true" }, "›"));
+    const list = games => h("div", { class: "card games", style: "gap:0;overflow:hidden" },
+      games.map((g, i) => [i ? h("div", { style: "height:1px;background:var(--line);margin-left:66px" }) : null, row(g)]));
+
+    if (!state.games.length) {
+      return [h("h2", { class: "section" }, "Games"),
+        h("div", { class: "card empty" }, "No games published yet. They'll show up here as soon as the scorer starts one.")];
+    }
+    // Live games first, then the rest grouped by season / tournament like the app (newest group first,
+    // games with no season last). Without any seasons it's one plain list.
+    const ordered = [...live, ...state.games.filter(g => g.isFinal)];
+    const events = eventsOf(ordered);
+    if (!events.length) return [live.map(liveCard), h("h2", { class: "section" }, "Games"), list(ordered)];
+    const groups = events.map(e => ({ title: e.name, tournament: e.kind === "tournament", games: ordered.filter(g => eventKey(g) === e.key) }));
+    const rest = ordered.filter(g => !g.event);
+    if (rest.length) groups.push({ title: "Other games", tournament: false, games: rest });
     return [
       live.map(liveCard),
-      h("h2", { class: "section" }, "Games"),
-      state.games.length
-        ? h("div", { class: "card games", style: "gap:0;overflow:hidden" },
-            [...live, ...finals].map((g, i) => [i ? h("div", { style: "height:1px;background:var(--line);margin-left:66px" }) : null, row(g)]))
-        : h("div", { class: "card empty" }, "No games published yet. They'll show up here as soon as the scorer starts one."),
+      groups.map(gr => [
+        h("h2", { class: "section" }, gr.title, gr.tournament ? h("span", { class: "pill tourney" }, "Tournament") : null,
+          h("span", { class: "rec" }, record(gr.games))),
+        list(gr.games),
+      ]),
     ];
   }
 
@@ -514,7 +578,7 @@
   function statsView() {
     const teams = [...new Set(state.games.map(g => g.team).filter(Boolean))].sort();
     const team = teams.includes(state.statsTeam) ? state.statsTeam : "";
-    const games = state.games.filter(g => !team || g.team === team);
+    const games = state.games.filter(g => (!team || g.team === team) && inEvent(g));
     const { col, dir } = state.statsSort;
     const rows = seasonLines(games).sort((a, b) => {
       if (col === "name") return a.name.localeCompare(b.name) * -dir;
@@ -523,12 +587,17 @@
     const total = rows.length ? derive(Object.fromEntries([["name", "Team"], ...FIELDS.map(f => [f, rows.reduce((s, r) => s + r[f], 0)])])) : null;
     if (total) { total._total = true; total.g = ""; }
     const columns = [BATTING[0], { key: "g", label: "G", title: "Games" }, ...BATTING.slice(1)];
+    const finals = games.filter(g => g.isFinal).length;
     return [
-      h("h2", { class: "section" }, "Season Stats"),
-      teams.length > 1 ? h("div", { class: "controls" },
-        h("select", { class: "control", "aria-label": "Team", onchange: e => { state.statsTeam = e.target.value; render(); } },
-          h("option", { value: "" }, "All teams"),
-          teams.map(t => { const o = h("option", { value: t }, t); if (t === team) o.selected = true; return o; }))) : null,
+      h("h2", { class: "section" }, currentEventLabel() || "Season Stats",
+        h("span", { class: "rec" }, `${record(games)} · ${finals} game${finals === 1 ? "" : "s"}`)),
+      h("div", { class: "controls" },
+        eventSelect(),
+        teams.length > 1
+          ? h("select", { class: "control", "aria-label": "Team", onchange: e => { state.statsTeam = e.target.value; render(); } },
+              h("option", { value: "" }, "All teams"),
+              teams.map(t => { const o = h("option", { value: t }, t); if (t === team) o.selected = true; return o; }))
+          : null),
       rows.length
         ? statsTable(columns, [...rows, total], {
             sort: state.statsSort,
@@ -543,18 +612,20 @@
   }
 
   function sprayView() {
+    const pool = state.games.filter(inEvent);
     const all = [];
-    for (const g of state.games) for (const s of g.spray || []) all.push({ ...s, game: g });
+    for (const g of pool) for (const s of g.spray || []) all.push({ ...s, game: g });
     const players = [...new Set(all.map(s => s.name))].sort((a, b) => a.localeCompare(b));
     const player = players.includes(state.sprayPlayer) ? state.sprayPlayer : "";
-    const gamesWith = state.games.filter(g => (g.spray || []).some(s => !player || s.name === player));
+    const gamesWith = pool.filter(g => (g.spray || []).some(s => !player || s.name === player));
     const game = gamesWith.find(g => g.id === state.sprayGame) || null;
     const dots = all.filter(s => (!player || s.name === player) && (!game || s.game === game));
-    const label = game ? `${fmtDate(game.date)} · ${title(game)}` : `All games · ${state.board?.name || ""}`;
+    const label = game ? `${fmtDate(game.date)} · ${title(game)}` : `${currentEventLabel() || "All games"} · ${state.board?.name || ""}`;
     const option = (value, text, selected) => { const o = h("option", { value }, text); if (selected) o.selected = true; return o; };
     return [
       h("h2", { class: "section" }, "Spray Charts"),
       h("div", { class: "controls" },
+        eventSelect(),
         h("select", { class: "control", "aria-label": "Player", onchange: e => { state.sprayPlayer = e.target.value; render(); } },
           option("", "Whole team", !player),
           players.map(p => option(p, `${p} (${all.filter(s => s.name === p).length})`, p === player))),

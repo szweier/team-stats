@@ -12,7 +12,16 @@
 </head>
 <body>
   <div id="app" aria-live="polite"></div>
-  <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script>
+    // Always load the latest config and code: hosts like GitHub Pages let browsers keep old copies
+    // for up to 10 minutes, so an update (or a just-filled-in config.js) wouldn't show right away.
+    (function load(files) {
+      if (!files.length) return;
+      var s = document.createElement("script");
+      s.src = files[0] + "?v=" + Date.now();
+      s.onload = function () { load(files.slice(1)); };
+      document.body.appendChild(s);
+    })(["config.js", "app.js"]);
+  </script>
 </body>
 </html>
