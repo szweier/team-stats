@@ -2304,5 +2304,132 @@ window.STATBOOK_DEMO = {
    "event": "Labor Day Classic",
    "eventKind": "tournament"
   }
+ ],
+ "members": [
+  {
+   "uid": "demo-me",
+   "name": "You"
+  },
+  {
+   "uid": "demo-alex",
+   "name": "Alex"
+  },
+  {
+   "uid": "demo-blake",
+   "name": "Blake"
+  },
+  {
+   "uid": "demo-casey",
+   "name": "Casey"
+  },
+  {
+   "uid": "demo-drew",
+   "name": "Drew"
+  },
+  {
+   "uid": "demo-emery",
+   "name": "Emery"
+  },
+  {
+   "uid": "demo-frankie",
+   "name": "Frankie"
+  },
+  {
+   "uid": "demo-gray",
+   "name": "Gray"
+  },
+  {
+   "uid": "demo-harper",
+   "name": "Harper"
+  },
+  {
+   "uid": "demo-jordan",
+   "name": "Jordan"
+  },
+  {
+   "uid": "demo-kai",
+   "name": "Kai"
+  }
+ ],
+ "schedule": [
+  {
+   "id": "DEMOGAME0001",
+   "date": "2026-11-01",
+   "time": "19:00",
+   "opponent": "Hawks",
+   "isHome": true,
+   "location": "Riverside Park Field 2",
+   "notes": "Black jerseys. Arrive 20 min early.",
+   "availability": {
+    "demo-alex": {
+     "status": "in",
+     "name": "Alex"
+    },
+    "demo-blake": {
+     "status": "in",
+     "name": "Blake"
+    },
+    "demo-casey": {
+     "status": "maybe",
+     "name": "Casey",
+     "note": "depends on work"
+    },
+    "demo-drew": {
+     "status": "in",
+     "name": "Drew"
+    },
+    "demo-emery": {
+     "status": "out",
+     "name": "Emery",
+     "note": "out of town"
+    },
+    "demo-gray": {
+     "status": "in",
+     "name": "Gray"
+    }
+   }
+  },
+  {
+   "id": "DEMOGAME0002",
+   "date": "2026-11-08",
+   "time": "18:30",
+   "opponent": "Owls",
+   "isHome": false,
+   "location": "Lincoln Fields",
+   "notes": "",
+   "availability": {
+    "demo-harper": {
+     "status": "in",
+     "name": "Harper"
+    },
+    "demo-kai": {
+     "status": "in",
+     "name": "Kai"
+    }
+   }
+  },
+  {
+   "id": "DEMOGAME0003",
+   "date": "2026-10-24",
+   "time": "19:00",
+   "opponent": "Bulldogs",
+   "isHome": false,
+   "location": "Memorial Park",
+   "notes": "",
+   "availability": {
+    "demo-alex": {
+     "status": "in",
+     "name": "Alex"
+    },
+    "demo-jordan": {
+     "status": "in",
+     "name": "Jordan"
+    },
+    "demo-kai": {
+     "status": "out",
+     "name": "Kai"
+    }
+   }
+  }
  ]
 };

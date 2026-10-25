@@ -20,36 +20,44 @@
     <p class="muted">Slow Pitch Book app and team stats website · Last updated October 25, 2026</p>
 
     <h2>The short version</h2>
-    <p>Slow Pitch Book keeps your scorebook on your device. Nothing leaves your device unless you turn on a
-      team website, and then only that team's game stats are uploaded. There are no ads, no tracking and no
-      analytics.</p>
+    <p>Slow Pitch Book keeps your scorebook on your device. A team's website is private to the players on that
+      team: you sign in with your email, and only teammates see the schedule, who's coming and the stats. There
+      are no ads, no tracking and no analytics.</p>
 
     <h2>What stays on your device</h2>
-    <p>Games, lineups, player names, plays, spray charts, seasons and settings are stored only on your iPhone
-      or iPad. One-player games are never uploaded.</p>
+    <p>Games, lineups, player names, plays, spray charts, seasons and settings in the app are stored only on your
+      iPhone or iPad. One-player games are never uploaded.</p>
 
-    <h2>What is uploaded when you create a team website</h2>
+    <h2>What the app uploads to a team website</h2>
     <ul>
-      <li>For each of that team's games: the date, team and opponent names, season or tournament name,
-        score, line score, play-by-play, each player's name and stats, where balls were hit, the live game
-        situation, and a picture of the scorebook.</li>
-      <li>A random team identifier, which is the team's website link, and a random scorer code.</li>
-      <li>An anonymous account identifier created by the app so only the team's scorers can change its page.
-        It isn't linked to your name, email, Apple ID or device.</li>
+      <li>For each of that team's games: the date, team and opponent names, season or tournament name, score,
+        line score, play-by-play, each player's name and stats, where balls were hit, the live game situation,
+        and a picture of the scorebook.</li>
+      <li>A random team identifier, a scorer code, and an anonymous account identifier the app creates so only
+        the team's scorers can publish. It isn't linked to your name, email, Apple ID or device.</li>
     </ul>
-    <p>This data is stored with Google Firebase (Cloud Firestore) and is shown on the team's page to anyone who has
-      the team's link. Don't add information you wouldn't want your team to see.</p>
 
-    <h2>The website</h2>
-    <p>The website reads the stats for the team link you open. It remembers which teams you've opened in your own
-      browser's storage so you can switch between them; that list never leaves your browser. The website uses
-      no cookies, analytics or ads. Your browser connects to Google Firebase to load stats and to GitHub Pages,
-      which hosts the site; their standard server logs may include your IP address.</p>
+    <h2>What the website stores when you sign in</h2>
+    <ul>
+      <li>Your email address (to send sign-in links), the name you choose, and the teams you're on.</li>
+      <li>For teams you're on: the schedule your managers add (dates, times, opponents, locations, notes) and
+        your answers to "Can you make it?", including any note you add.</li>
+    </ul>
+    <p>Your name, your answers and the team's stats are visible to the other players on that team. Your email
+      address isn't shown to anyone. Managers can see the team's invite link and scorer code.</p>
+    <p>Everything is stored with Google Firebase (Authentication and Cloud Firestore). The website is hosted on
+      GitHub Pages; their standard server logs may include your IP address. The website keeps your sign-in on
+      your own device and uses no cookies, analytics or ads.</p>
 
     <h2>Deleting your data</h2>
-    <p>In the app, go to Settings → Team websites → your team → <b>Delete Website &amp; Its Data</b>. This removes
-      the team's page and every game on it from the server right away. Deleting the app removes everything stored
-      on your device.</p>
+    <ul>
+      <li><b>Leave a team:</b> on the team's Team tab, tap Leave Team.</li>
+      <li><b>Delete a team</b> (managers): Team tab → Delete Team removes its schedule, answers, players and
+        stats for everyone. In the app, Settings → Team websites → your team → Delete Website &amp; Its Data does
+        the same.</li>
+      <li><b>Delete your account</b>: email us at the address below and we'll remove your account, your name and
+        your answers.</li>
+    </ul>
 
     <h2>Children</h2>
     <p>Slow Pitch Book is a scorekeeping tool for adult recreational sports and isn't directed at children.</p>

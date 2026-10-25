@@ -1,8 +1,10 @@
-// Team stats website for Slow Pitch Book.
+// Team website for Slow Pitch Book.
 //
-// Every team has its own page: the app publishes each game to Firestore under teams/{teamId}, and the
-// team's link is this site with ?t={teamId} (see Publisher.swift). The id is long and random, so the
-// link is what grants access. Teams you've opened are remembered so you can switch between them.
+// Players sign in with an emailed link and can be on any number of teams. Each team (teams/{teamId} in
+// Firestore) has members, managers and the app's scorers. Members see the schedule, mark whether they can
+// make each game, and see the stats the app publishes; managers add games and invite people. The app's
+// scorer code links a team made in the app to the website (entering it here makes you its manager).
+// Security lives in firestore.rules; this page only shows what the rules let the signed-in person see.
 
 (() => {
   "use strict";
@@ -10,7 +12,11 @@
   const cfg = window.STATBOOK_CONFIG || {};
   const params = new URLSearchParams(location.search);
   const DEMO = params.has("demo");
-  const TEAM = DEMO ? "demo" : (params.get("t") || "").replace(/[^A-Za-z0-9]/g, "");
+  const clean = s => (s || "").replace(/[^A-Za-z0-9]/g, "");
+  const TEAM = DEMO ? "demo" : clean(params.get("t"));
+  const JOIN = clean(params.get("join"));
+  const CLAIM = clean(params.get("claim")).toUpperCase();
+  const SITE = location.origin + location.pathname;
   const REFRESH_MS = 20000;
   const app = document.getElementById("app");
 
@@ -22,18 +28,25 @@
   };
 
   const state = {
-    key: null,
-    board: null,          // { name }
+    profile: null,        // { name, email, teams: { teamId: name } }
+    key: null,            // open team's id
+    team: null,           // { name, members, managers, editors }
+    board: null,          // { name } (for the stats views)
     games: [],            // PublishedGame objects, newest first
-    signature: "",        // last data loaded, to skip re-rendering when nothing changed
+    schedule: [],         // [{ id, date, time, opponent, isHome, location, notes, availability }]
+    members: [],          // [{ uid, name }]
+    settings: null,       // { scorerCode, inviteCode } (managers)
+    signature: "",
     updated: null,
-    books: {},            // game id -> data URL, "none", or "loading"
+    books: {},
+    editing: null,        // schedule game being edited: id, "new", or null
     statsSort: { col: "avg", dir: -1 },
     statsTeam: "",
     sprayPlayer: "",
     sprayGame: "",
-    event: storage.get("statbook.event") || "",   // season / tournament filter ("" = all, "none" = no season)
-    gamePlayer: {},       // game id -> player shown on that game's spray chart
+    event: storage.get("statbook.event") || "",
+    gamePlayer: {},
+    flash: "",            // one-time message shown at the top of a page
   };
 
   // ---------- Small DOM helper (text always goes in as text, never as HTML) ----------
@@ -45,6 +58,7 @@
       if (k === "class") el.className = v;
       else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
       else if (k === "svg") el.innerHTML = v;   // only SVG this file builds from numbers
+      else if (k === "value") el.value = v;
       else el.setAttribute(k, v === true ? "" : v);
     }
     for (const kid of kids.flat(Infinity)) {
@@ -162,31 +176,161 @@
     return t ? `${w}-${l}-${t}` : `${w}-${l}`;
   }
 
-  // ---------- Data ----------
+  // ---------- Firestore & sign-in (REST, no SDK) ----------
 
   const configured = () => DEMO || (cfg.projectId && cfg.apiKey && !/^YOUR-/.test(cfg.projectId) && !/^YOUR-/.test(cfg.apiKey));
+  const DOCS = `projects/${cfg.projectId}/databases/(default)/documents`;
 
-  /// Teams opened on this device: [{ id, name }], most recent first.
-  function rememberedTeams() {
-    try { return JSON.parse(storage.get("statbook.teams") || "[]").filter(t => t && t.id); } catch { return []; }
-  }
-  function rememberTeam(id, name) {
-    storage.set("statbook.teams", JSON.stringify([{ id, name }, ...rememberedTeams().filter(t => t.id !== id)].slice(0, 12)));
-  }
-  function forgetTeam(id) {
-    storage.set("statbook.teams", JSON.stringify(rememberedTeams().filter(t => t.id !== id)));
-  }
-  const teamURL = id => `${location.pathname}?t=${encodeURIComponent(id)}`;
+  class Forbidden extends Error {}
 
-  async function firestore(path, query) {
-    const url = new URL(`https://firestore.googleapis.com/v1/projects/${encodeURIComponent(cfg.projectId)}/databases/(default)/documents/${path}`);
+  function enc(v) {
+    if (v === null || v === undefined) return { nullValue: null };
+    if (typeof v === "boolean") return { booleanValue: v };
+    if (typeof v === "number") return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+    if (typeof v === "string") return { stringValue: v };
+    if (Array.isArray(v)) return { arrayValue: { values: v.map(enc) } };
+    return { mapValue: { fields: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, enc(x)])) } };
+  }
+  function dec(v) {
+    if (!v) return null;
+    if ("stringValue" in v) return v.stringValue;
+    if ("integerValue" in v) return Number(v.integerValue);
+    if ("doubleValue" in v) return v.doubleValue;
+    if ("booleanValue" in v) return v.booleanValue;
+    if ("arrayValue" in v) return (v.arrayValue.values || []).map(dec);
+    if ("mapValue" in v) return fieldsOf(v.mapValue);
+    return null;
+  }
+  const fieldsOf = d => Object.fromEntries(Object.entries(d?.fields || {}).map(([k, v]) => [k, dec(v)]));
+  const idOf = d => d.name.split("/").pop();
+  const quote = f => (/^[A-Za-z_][A-Za-z_0-9]*$/.test(f) ? f : "`" + f + "`");
+
+  // Session: { uid, email, idToken, refreshToken, expires }
+  let session = null;
+  try { session = JSON.parse(storage.get("statbook.session") || "null"); } catch { session = null; }
+  const saveSession = s => { session = s; storage.set("statbook.session", s ? JSON.stringify(s) : null); };
+
+  async function idToken() {
+    if (!session) return null;
+    if (session.expires > Date.now() + 60000) return session.idToken;
+    const res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${cfg.apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(session.refreshToken)}`,
+    });
+    if (!res.ok) { saveSession(null); return null; }
+    const j = await res.json();
+    saveSession({ ...session, idToken: j.id_token, refreshToken: j.refresh_token, expires: Date.now() + Number(j.expires_in || 3600) * 1000 });
+    return session.idToken;
+  }
+
+  async function authCall(endpoint, body) {
+    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:${endpoint}?key=${cfg.apiKey}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const m = j.error?.message || `error ${res.status}`;
+      throw new Error(m.includes("INVALID_OOB_CODE") || m.includes("EXPIRED_OOB_CODE")
+        ? "That sign-in link expired or was already used. Send yourself a new one."
+        : m.includes("INVALID_EMAIL") ? "That email address doesn't look right."
+        : m.includes("OPERATION_NOT_ALLOWED") ? "Email sign-in isn't turned on for this site yet."
+        : `Sign-in didn't work (${m}).`);
+    }
+    return j;
+  }
+
+  /// Where the emailed link brings you back to: this page with its team/invite, minus sign-in leftovers.
+  function returnURL() {
+    const u = new URL(location.href);
+    for (const k of ["apiKey", "oobCode", "mode", "lang", "continueUrl", "tenantId"]) u.searchParams.delete(k);
+    u.hash = "";
+    return u.toString();
+  }
+
+  async function sendSignInLink(email) {
+    await authCall("sendOobCode", { requestType: "EMAIL_SIGNIN", email, continueUrl: returnURL(), canHandleCodeInApp: true });
+    storage.set("statbook.pendingEmail", email);
+  }
+
+  async function finishSignIn(email, oobCode) {
+    const j = await authCall("signInWithEmailLink", { email, oobCode });
+    saveSession({ uid: j.localId, email: j.email || email, idToken: j.idToken, refreshToken: j.refreshToken,
+                  expires: Date.now() + Number(j.expiresIn || 3600) * 1000 });
+    storage.set("statbook.pendingEmail", null);
+    history.replaceState(null, "", returnURL());
+  }
+
+  function signOut() {
+    saveSession(null);
+    stopRefresh();
+    location.href = SITE;
+  }
+
+  async function fs(method, path, { query = [], body } = {}) {
+    const url = new URL(`https://firestore.googleapis.com/v1/${path.startsWith("projects/") ? path : `${DOCS}/${path}`}`);
     url.searchParams.set("key", cfg.apiKey);
-    for (const [k, v] of Object.entries(query || {})) if (v != null) url.searchParams.set(k, v);
-    const res = await fetch(url, { cache: "no-store" });
-    if (res.status === 404 || res.status === 403) return null;
-    if (!res.ok) throw new Error(`The stats server answered ${res.status}.`);
-    return res.json();
+    for (const [k, v] of query) if (v != null) url.searchParams.append(k, v);
+    const headers = {};
+    const token = await idToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (body) headers["Content-Type"] = "application/json";
+    const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined, cache: "no-store" });
+    if (res.status === 404 && method !== "POST") return null;
+    if (res.status === 403 || res.status === 401) throw new Forbidden("You don't have access to that.");
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error(j.error?.message || `The server answered ${res.status}.`);
+    }
+    return res.status === 204 ? null : res.json().catch(() => null);
   }
+
+  const getDoc = async path => { const d = await fs("GET", path); return d ? fieldsOf(d) : null; };
+  const deleteDoc = path => fs("DELETE", path);
+
+  /// Writes the given fields (dotted paths allowed in `mask`); fields left out of `data` but in the mask are deleted.
+  function setDoc(path, data, { mask, exists } = {}) {
+    const query = (mask || Object.keys(data)).map(f => ["updateMask.fieldPaths", f]);
+    if (exists != null) query.push(["currentDocument.exists", String(exists)]);
+    return fs("PATCH", path, { query, body: { fields: fieldsOf_enc(data) } });
+  }
+  const fieldsOf_enc = data => Object.fromEntries(Object.entries(data).map(([k, v]) => [k, enc(v)]));
+
+  async function listDocs(path, extra = []) {
+    const out = [];
+    let pageToken;
+    do {
+      const page = await fs("GET", path, { query: [["pageSize", "300"], ...extra, ["pageToken", pageToken]] });
+      for (const d of page?.documents || []) out.push({ id: idOf(d), ...fieldsOf(d) });
+      pageToken = page?.nextPageToken;
+    } while (pageToken);
+    return out;
+  }
+
+  /// Adds / removes values in a team's lists on the server, so you don't need to read the team first.
+  function changeLists(teamId, { add = {}, remove = {}, set = {} }) {
+    const transforms = [
+      ...Object.entries(add).map(([f, vals]) => ({ fieldPath: f, appendMissingElements: { values: vals.map(enc) } })),
+      ...Object.entries(remove).map(([f, vals]) => ({ fieldPath: f, removeAllFromArray: { values: vals.map(enc) } })),
+    ];
+    return fs("POST", `${DOCS}:commit`, { body: { writes: [{
+      update: { name: `${DOCS}/teams/${teamId}`, fields: fieldsOf_enc(set) },
+      updateMask: { fieldPaths: Object.keys(set) },
+      updateTransforms: transforms,
+      currentDocument: { exists: true },
+    }] } });
+  }
+
+  function randomCode(length, alphabet) {
+    const bytes = crypto.getRandomValues(new Uint32Array(length));
+    return [...bytes].map(b => alphabet[b % alphabet.length]).join("");
+  }
+  const newTeamId = () => randomCode(22, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
+  const newCode = () => randomCode(12, "ABCDEFGHJKLMNPQRSTUVWXYZ23456789");
+  const showCode = c => (c || "").replace(/(.{4})(?=.)/g, "$1-");
+  const now = () => Math.floor(Date.now() / 1000);
+
+  // ---------- Data ----------
 
   let demoData = null;
   async function loadDemo() {
@@ -203,31 +347,100 @@
     return demoData;
   }
 
-  /// Loads a team and all its games. Returns false when no team has that id.
+  const me = () => (DEMO ? "demo-me" : session?.uid);
+  const isManager = () => DEMO || (state.team?.managers || []).includes(me());
+
+  async function loadProfile() {
+    if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
+    state.profile = (await getDoc(`users/${me()}`)) || { teams: {} };
+    state.profile.teams = state.profile.teams || {};
+  }
+
+  async function saveName(name) {
+    await setDoc(`users/${me()}`, { name, email: session.email }, { mask: ["name", "email"] });
+    state.profile.name = name;
+    // Keep your name current on every team you're on.
+    for (const teamId of Object.keys(state.profile.teams)) {
+      try { await setDoc(`teams/${teamId}/members/${me()}`, { name, joinedAt: now() }, { mask: ["name"] }); } catch { /* left or deleted */ }
+    }
+  }
+
+  async function addToMyTeams(teamId, name) {
+    await setDoc(`users/${me()}`, { teams: { [teamId]: name } }, { mask: [`teams.${quote(teamId)}`] });
+    state.profile.teams[teamId] = name;
+  }
+  async function dropFromMyTeams(teamId) {
+    await setDoc(`users/${me()}`, {}, { mask: [`teams.${quote(teamId)}`] });
+    delete state.profile.teams[teamId];
+  }
+
+  async function becomeMember(teamId, teamName) {
+    await setDoc(`teams/${teamId}/members/${me()}`, { name: state.profile.name, joinedAt: now() });
+    await addToMyTeams(teamId, teamName);
+  }
+
+  async function createTeam(name) {
+    const teamId = newTeamId(), scorerCode = newCode(), inviteCode = newCode();
+    await setDoc(`teams/${teamId}`, { name, members: [me()], managers: [me()], editors: [], updatedAt: now() }, { exists: false });
+    await setDoc(`scorerCodes/${scorerCode}`, { teamId, createdAt: now() }, { exists: false });
+    await setDoc(`invites/${inviteCode}`, { teamId, teamName: name, createdAt: now() }, { exists: false });
+    await setDoc(`teams/${teamId}/private/settings`, { scorerCode, inviteCode });
+    await becomeMember(teamId, name);
+    return teamId;
+  }
+
+  async function joinWithInvite(code) {
+    const invite = await getDoc(`invites/${code}`);
+    if (!invite) throw new Error("That invite link has expired. Ask your manager for a new one.");
+    await changeLists(invite.teamId, { add: { members: [me()] }, set: { joinedWith: code } });
+    await becomeMember(invite.teamId, invite.teamName);
+    return invite.teamId;
+  }
+
+  /// The app's scorer code makes you the team's manager (and a member).
+  async function claimWithScorerCode(rawCode) {
+    const code = clean(rawCode).toUpperCase();
+    const link = code.length >= 10 ? await getDoc(`scorerCodes/${code}`) : null;
+    if (!link) throw new Error("That scorer code didn't match a team. Check it in the app under Settings → Team websites.");
+    await changeLists(link.teamId, { add: { members: [me()], managers: [me()] }, set: { joinedWith: code } });
+    const team = await getDoc(`teams/${link.teamId}`);
+    let settings = await getDoc(`teams/${link.teamId}/private/settings`);
+    if (!settings?.inviteCode) {
+      const inviteCode = newCode();
+      await setDoc(`invites/${inviteCode}`, { teamId: link.teamId, teamName: team.name, createdAt: now() }, { exists: false });
+      await setDoc(`teams/${link.teamId}/private/settings`, { scorerCode: code, inviteCode });
+    }
+    await becomeMember(link.teamId, team.name);
+    return link.teamId;
+  }
+
+  /// Loads the open team: its record, members, schedule and published games. False if you're not on it.
   async function load(teamId) {
-    let board, games;
+    let team, games, schedule, members, settings = null;
     if (DEMO) {
       const d = await loadDemo();
-      board = d.board;
+      team = { name: d.board.name, members: d.members.map(m => m.uid), managers: ["demo-me"], editors: [] };
       games = d.games;
+      schedule = state.schedule.length ? state.schedule : d.schedule.map(x => ({ ...x }));
+      members = d.members;
+      settings = { scorerCode: "DEMOCODE2026", inviteCode: "DEMOINVITE26" };
     } else {
-      const doc = await firestore(`teams/${teamId}`);
-      if (!doc) return false;
-      board = { name: doc.fields?.name?.stringValue || "Team Stats" };
-      games = [];
-      let pageToken;
-      do {
-        const page = await firestore(`teams/${teamId}/games`, { pageSize: 300, pageToken });
-        for (const d of page?.documents || []) {
-          try { games.push(JSON.parse(d.fields.json.stringValue)); } catch { /* skip a damaged game */ }
-        }
-        pageToken = page?.nextPageToken;
-      } while (pageToken);
+      try { team = await getDoc(`teams/${teamId}`); } catch (e) { if (e instanceof Forbidden) return false; throw e; }
+      if (!team) return false;
+      [games, schedule, members] = await Promise.all([
+        listDocs(`teams/${teamId}/games`).then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean)),
+        listDocs(`teams/${teamId}/schedule`),
+        listDocs(`teams/${teamId}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))),
+      ]);
+      if ((team.managers || []).includes(me())) settings = await getDoc(`teams/${teamId}/private/settings`).catch(() => null);
+      // Keep "My teams" in step with the team's current name.
+      if (state.profile.teams[teamId] !== team.name) addToMyTeams(teamId, team.name).catch(() => {});
     }
     games.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-    const signature = JSON.stringify([board, games]);
+    schedule.sort((a, b) => `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`));
+    const signature = JSON.stringify([team, games, schedule, members, settings]);
     const changed = signature !== state.signature;
-    Object.assign(state, { key: teamId, board, games, signature, updated: new Date() });
+    Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, settings, signature, updated: new Date() });
     return changed ? "changed" : "same";
   }
 
@@ -235,13 +448,92 @@
     if (state.books[id]) return;
     state.books[id] = "loading";
     try {
-      const doc = DEMO ? null : await firestore(`teams/${state.key}/books/${encodeURIComponent(id)}`);
-      const jpeg = doc?.fields?.jpeg?.stringValue;
-      state.books[id] = jpeg ? `data:image/jpeg;base64,${jpeg}` : "none";
+      const doc = DEMO ? null : await getDoc(`teams/${state.key}/books/${encodeURIComponent(id)}`);
+      state.books[id] = doc?.jpeg ? `data:image/jpeg;base64,${doc.jpeg}` : "none";
     } catch {
       state.books[id] = "none";
     }
     if (route().name === "game" && route().id === id) render();
+  }
+
+  // Schedule & availability
+
+  async function saveGame(id, game) {
+    if (DEMO) {
+      const i = state.schedule.findIndex(x => x.id === id);
+      if (i >= 0) state.schedule[i] = { ...state.schedule[i], ...game };
+      else state.schedule.push({ id: newCode(), ...game, availability: {} });
+      return;
+    }
+    const fields = ["date", "time", "opponent", "isHome", "location", "notes", "updatedAt"];
+    await setDoc(`teams/${state.key}/schedule/${id || newCode()}`, { ...game, updatedAt: now() }, { mask: fields });
+  }
+
+  async function deleteGame(id) {
+    if (DEMO) { state.schedule = state.schedule.filter(x => x.id !== id); return; }
+    await deleteDoc(`teams/${state.key}/schedule/${id}`);
+  }
+
+  async function answer(gameId, status) {
+    const name = state.profile.name || "Player";
+    if (DEMO) {
+      const g = state.schedule.find(x => x.id === gameId);
+      g.availability = { ...(g.availability || {}) };
+      if (status) g.availability[me()] = { status, name }; else delete g.availability[me()];
+      return;
+    }
+    const path = `availability.${quote(me())}`;
+    await setDoc(`teams/${state.key}/schedule/${gameId}`,
+      status ? { availability: { [me()]: { status, name, updatedAt: now() } } } : {}, { mask: [path], exists: true });
+  }
+
+  // Team management (managers)
+
+  async function setRoles(members, managers) {
+    if (DEMO) throw new Error("That isn't available in the demo.");
+    await setDoc(`teams/${state.key}`, { name: state.team.name, members, managers, updatedAt: now() },
+      { mask: ["name", "members", "managers", "updatedAt"], exists: true });
+  }
+
+  async function removeMember(uid) {
+    if (DEMO) throw new Error("That isn't available in the demo.");
+    await setRoles((state.team.members || []).filter(x => x !== uid), (state.team.managers || []).filter(x => x !== uid));
+    await deleteDoc(`teams/${state.key}/members/${uid}`).catch(() => {});
+  }
+
+  async function renameTeam(name) {
+    if (DEMO) throw new Error("That isn't available in the demo.");
+    await setDoc(`teams/${state.key}`, { name, updatedAt: now() }, { mask: ["name", "updatedAt"], exists: true });
+    if (state.settings?.inviteCode) {
+      await setDoc(`invites/${state.settings.inviteCode}`, { teamName: name }, { mask: ["teamName"] }).catch(() => {});
+    }
+  }
+
+  async function newInviteLink() {
+    if (DEMO) throw new Error("That isn't available in the demo.");
+    const code = newCode();
+    await setDoc(`invites/${code}`, { teamId: state.key, teamName: state.team.name, createdAt: now() }, { exists: false });
+    if (state.settings?.inviteCode) await deleteDoc(`invites/${state.settings.inviteCode}`).catch(() => {});
+    await setDoc(`teams/${state.key}/private/settings`, { inviteCode: code }, { mask: ["inviteCode"] });
+  }
+
+  async function leaveTeam() {
+    await deleteDoc(`teams/${state.key}/members/${me()}`).catch(() => {});
+    await changeLists(state.key, { remove: { members: [me()], managers: [me()] } });
+    await dropFromMyTeams(state.key);
+  }
+
+  /// Deletes the team and everything in it, for everyone.
+  async function deleteTeam() {
+    const t = state.key;
+    for (const sub of ["schedule", "games", "books", "members"]) {
+      for (const d of await listDocs(`teams/${t}/${sub}`, [["mask.fieldPaths", "updatedAt"]])) await deleteDoc(`teams/${t}/${sub}/${d.id}`);
+    }
+    if (state.settings?.inviteCode) await deleteDoc(`invites/${state.settings.inviteCode}`).catch(() => {});
+    if (state.settings?.scorerCode) await deleteDoc(`scorerCodes/${state.settings.scorerCode}`).catch(() => {});
+    await deleteDoc(`teams/${t}/private/settings`).catch(() => {});
+    await deleteDoc(`teams/${t}`);
+    await dropFromMyTeams(t);
   }
 
   // ---------- Routing ----------
@@ -249,9 +541,8 @@
   function route() {
     const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
     if (parts[0] === "game" && parts[1]) return { name: "game", id: decodeURIComponent(parts[1]) };
-    if (parts[0] === "stats") return { name: "stats" };
-    if (parts[0] === "spray") return { name: "spray" };
-    return { name: "games" };
+    if (["games", "stats", "spray", "team"].includes(parts[0])) return { name: parts[0] };
+    return { name: "schedule" };
   }
 
   // ---------- Field drawing (same shapes and colors as the app) ----------
@@ -377,42 +668,181 @@
     { key: "ops", label: "OPS", rate: true },
   ];
 
-  // ---------- Views ----------
+  // ---------- Small UI helpers ----------
 
-  /// No team in the link: your remembered teams, or how to get a link.
-  function landingView(message) {
-    const teams = rememberedTeams();
-    const input = h("input", { type: "url", placeholder: "Paste a team link", "aria-label": "Team link", required: true });
-    const err = h("div", { class: "err", role: "alert" }, message || "");
-    const form = h("form", {
-      onsubmit: e => {
-        e.preventDefault();
-        const text = input.value.trim();
-        let id = "";
-        try { id = new URL(text, location.href).searchParams.get("t") || ""; } catch { /* not a link */ }
-        if (!id && /^[A-Za-z0-9]{16,}$/.test(text)) id = text;
-        if (id) location.href = teamURL(id);
-        else err.textContent = "That doesn't look like a team link. Ask your scorer to share it from the app.";
-      },
-    }, input, h("button", { class: "btn", type: "submit" }, "Open Team"), err);
-    app.replaceChildren(h("div", { class: "lock" }, h("div", { class: "panel" },
-      h("img", { src: "apple-touch-icon.png", alt: "" }),
-      h("h1", null, "Team Stats"),
-      configured()
-        ? [
-            h("p", null, teams.length ? "Your teams" : "Open the link your team's scorer shared from the Slow Pitch Book app."),
-            teams.length ? h("div", { class: "team-list" }, teams.map(t => h("div", { class: "team-item" },
-              h("a", { href: teamURL(t.id) }, t.name || "Team"),
-              h("button", {
-                type: "button", class: "forget", "aria-label": `Remove ${t.name || "team"} from this list`,
-                onclick: () => { forgetTeam(t.id); landingView(); },
-              }, "×")))) : null,
-            teams.length ? h("p", { class: "or" }, "Or open another team") : null,
-            form,
-          ]
-        : h("p", null, "This site isn't set up yet: fill in public/config.js with your Firebase project ID and web API key."),
-      h("p", { class: "fine" }, h("a", { href: "privacy.html" }, "Privacy")))));
+  /// Runs an action from a button: disables it while working, then re-renders or shows the error.
+  function action(fn, { after } = {}) {
+    return async e => {
+      const btn = e?.currentTarget;
+      if (btn) btn.disabled = true;
+      try {
+        await fn();
+        if (after) await after(); else render();
+      } catch (err) {
+        if (btn) btn.disabled = false;
+        alert(err.message || "Something went wrong. Try again.");
+      }
+    };
   }
+
+  function panel(...kids) {
+    return h("div", { class: "lock" }, h("div", { class: "panel" },
+      h("img", { src: "apple-touch-icon.png", alt: "" }), ...kids,
+      h("p", { class: "fine" }, h("a", { href: "privacy.html" }, "Privacy"))));
+  }
+
+  function copyButton(text, label) {
+    return h("button", {
+      type: "button", class: "btn small ghost",
+      onclick: async e => {
+        try { await navigator.clipboard.writeText(text); } catch { prompt("Copy this:", text); return; }
+        const b = e.currentTarget; b.textContent = "Copied"; setTimeout(() => { b.textContent = label; }, 1800);
+      },
+    }, label);
+  }
+
+  function shareButton(url, text) {
+    if (!navigator.share) return null;
+    return h("button", { type: "button", class: "btn small", onclick: () => navigator.share({ url, text }).catch(() => {}) }, "Share…");
+  }
+
+  // ---------- Sign-in, name, home ----------
+
+  function signInView(message) {
+    const context = JOIN ? "Sign in to join your team." : CLAIM ? "Sign in to set up your team's website."
+      : TEAM ? "Sign in to see your team." : "Schedules, availability and stats for your slow pitch teams.";
+    const input = h("input", { type: "email", placeholder: "you@email.com", autocomplete: "email", required: true,
+                               "aria-label": "Email", value: storage.get("statbook.pendingEmail") || "" });
+    const err = h("div", { class: "err", role: "alert" }, message || "");
+    const button = h("button", { class: "btn", type: "submit" }, "Email Me a Sign-In Link");
+    const form = h("form", {
+      onsubmit: async e => {
+        e.preventDefault();
+        button.disabled = true;
+        err.textContent = "";
+        try {
+          await sendSignInLink(input.value.trim());
+          app.replaceChildren(panel(
+            h("h1", null, "Check your email"),
+            h("p", null, `We sent a sign-in link to ${input.value.trim()}. Open it on this device to finish signing in. It may take a minute, and check spam if it doesn't show up.`),
+            h("button", { class: "btn ghost", type: "button", onclick: () => signInView() }, "Use a different email")));
+        } catch (e2) {
+          err.textContent = e2.message;
+          button.disabled = false;
+        }
+      },
+    }, input, button, err);
+    app.replaceChildren(panel(h("h1", null, "Team Stats"), h("p", null, context), form,
+      h("p", { class: "or" }, "No password needed. New here? The same link creates your account.")));
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function finishSignInView(oobCode, message) {
+    const input = h("input", { type: "email", placeholder: "you@email.com", autocomplete: "email", required: true, "aria-label": "Email" });
+    const err = h("div", { class: "err", role: "alert" }, message || "");
+    app.replaceChildren(panel(
+      h("h1", null, "Finish signing in"),
+      h("p", null, "Enter the email address the link was sent to."),
+      h("form", {
+        onsubmit: async e => {
+          e.preventDefault();
+          try { await finishSignIn(input.value.trim(), oobCode); start(); } catch (e2) { err.textContent = e2.message; }
+        },
+      }, input, h("button", { class: "btn", type: "submit" }, "Sign In"), err)));
+  }
+
+  function nameView() {
+    const input = h("input", { type: "text", placeholder: "First and last name", autocomplete: "name", required: true,
+                               maxlength: "80", "aria-label": "Your name" });
+    app.replaceChildren(panel(
+      h("h1", null, "What's your name?"),
+      h("p", null, "This is what your teammates see on the schedule."),
+      h("form", {
+        onsubmit: async e => {
+          e.preventDefault();
+          const name = input.value.trim();
+          if (!name) return;
+          try { await saveName(name); start(); } catch (e2) { alert(e2.message); }
+        },
+      }, input, h("button", { class: "btn", type: "submit" }, "Continue"))));
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function homeView() {
+    const teams = Object.entries(state.profile.teams || {}).sort((a, b) => a[1].localeCompare(b[1]));
+    const create = h("input", { type: "text", placeholder: "Team name", maxlength: "80", required: true, "aria-label": "New team name" });
+    const code = h("input", { type: "text", placeholder: "ABCD-EFGH-JKLM", required: true, "aria-label": "Scorer code", autocapitalize: "characters" });
+    app.replaceChildren(panel(
+      h("h1", null, state.profile.name ? `Hi, ${state.profile.name.split(" ")[0]}` : "Your teams"),
+      flashMessage(),
+      teams.length
+        ? [h("p", null, "Your teams"), h("div", { class: "team-list" }, teams.map(([id, name]) =>
+            h("div", { class: "team-item" }, h("a", { href: `${SITE}?t=${id}` }, name || "Team"))))]
+        : h("p", null, "You're not on a team yet. Open the invite link from your team's manager, or start a team below."),
+      h("details", { class: "fold" }, h("summary", null, "Start a new team"),
+        h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await createTeam(create.value.trim()); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
+          create, h("button", { class: "btn", type: "submit" }, "Create Team"))),
+      h("details", { class: "fold" }, h("summary", null, "Keep score in the app? Add that team"),
+        h("p", { class: "or" }, "In Slow Pitch Book, open Settings → Team websites → your team, and enter its scorer code here. You'll become the team's manager."),
+        h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await claimWithScorerCode(code.value); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
+          code, h("button", { class: "btn", type: "submit" }, "Add Team"))),
+      h("p", { class: "or" }, `Signed in as ${session.email} · `,
+        h("a", { href: "#", onclick: e => { e.preventDefault(); nameEdit(); } }, "Change name"), " · ",
+        h("a", { href: "#", onclick: e => { e.preventDefault(); signOut(); } }, "Sign out"))));
+  }
+
+  function nameEdit() {
+    const name = prompt("Your name, as teammates see it:", state.profile.name || "");
+    if (name && name.trim()) action(() => saveName(name.trim()), { after: () => homeView() })();
+  }
+
+  function flashMessage() {
+    if (!state.flash) return null;
+    const m = state.flash;
+    state.flash = "";
+    return h("p", { class: "flash" }, m);
+  }
+
+  async function joinView() {
+    let invite = null;
+    try { invite = await getDoc(`invites/${JOIN}`); } catch { /* shown below */ }
+    if (!invite) {
+      state.flash = "That invite link has expired. Ask your manager for a new one.";
+      history.replaceState(null, "", SITE);
+      return homeView();
+    }
+    if (state.profile.teams[invite.teamId]) { location.replace(`${SITE}?t=${invite.teamId}`); return; }
+    app.replaceChildren(panel(
+      h("h1", null, `Join ${invite.teamName}?`),
+      h("p", null, `You'll see the schedule, mark which games you can make, and see the team's stats. Teammates will see you as ${state.profile.name}.`),
+      h("button", { class: "btn", type: "button", onclick: action(async () => {
+        const id = await joinWithInvite(JOIN);
+        location.replace(`${SITE}?t=${id}`);
+      }, { after: () => {} }) }, `Join ${invite.teamName}`),
+      h("p", { class: "or" }, h("a", { href: SITE }, "Not now"))));
+  }
+
+  function claimView() {
+    app.replaceChildren(panel(
+      h("h1", null, "Set up your team's website"),
+      h("p", null, "You'll become this team's manager: you can invite teammates, add the schedule, and everyone you invite can see the stats your app publishes."),
+      h("button", { class: "btn", type: "button", onclick: action(async () => {
+        const id = await claimWithScorerCode(CLAIM);
+        location.replace(`${SITE}?t=${id}#/team`);
+      }, { after: () => {} }) }, "Become Manager"),
+      h("p", { class: "or" }, h("a", { href: SITE }, "Not now"))));
+  }
+
+  function notMemberView() {
+    app.replaceChildren(panel(
+      h("h1", null, "You're not on this team"),
+      h("p", null, "Ask the team's manager for an invite link, or check that this is the right link. If the team was deleted, it's gone for everyone."),
+      state.profile.teams[TEAM] ? h("button", { class: "btn ghost", type: "button",
+        onclick: action(() => dropFromMyTeams(TEAM), { after: () => { location.href = SITE; } }) }, "Remove from My Teams") : null,
+      h("p", { class: "or" }, h("a", { href: SITE }, "‹ My Teams"))));
+  }
+
+  // ---------- Team pages ----------
 
   function shell(current, content) {
     const finals = state.games.filter(g => g.isFinal);
@@ -422,18 +852,187 @@
         h("div", { class: "brand" },
           h("img", { src: "apple-touch-icon.png", alt: "" }),
           h("div", null,
-            h("h1", null, state.board?.name || "Team Stats"),
-            h("div", { class: "sub" }, `${finals.length} game${finals.length === 1 ? "" : "s"} played`,
+            h("h1", null, state.team?.name || "Team"),
+            h("div", { class: "sub" }, `${state.members.length} player${state.members.length === 1 ? "" : "s"} · ${finals.length} game${finals.length === 1 ? "" : "s"} played`,
               DEMO ? " · " : "", DEMO ? h("span", { class: "pill demo" }, "Demo data") : null)),
           h("div", { class: "record" }, h("b", null, record(state.games)), h("span", { class: "sub" }, "Record"))),
         h("nav", { class: "tabs", "aria-label": "Sections" },
-          tab("games", "#/", "Games"), tab("stats", "#/stats", "Season Stats"), tab("spray", "#/spray", "Spray Charts"),
+          tab("schedule", "#/", "Schedule"), tab("games", "#/games", "Games"), tab("stats", "#/stats", "Stats"),
+          tab("spray", "#/spray", "Spray"), tab("team", "#/team", "Team"),
           h("span", { class: "spacer" }),
-          DEMO ? null : h("a", { class: "teams-link", href: location.pathname }, "My Teams")))),
-      h("main", { class: "wrap" }, content,
+          DEMO ? null : h("a", { class: "teams-link", href: SITE }, "My Teams")))),
+      h("main", { class: "wrap" }, flashMessage(), content,
         h("div", { class: "foot" },
           state.updated ? `Updated ${state.updated.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · ` : "",
-          "Refreshes automatically during games")),
+          "Refreshes automatically")),
+    ];
+  }
+
+  const todayISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  function fmtTime(t) {
+    if (!t) return "";
+    const [hh, mm] = t.split(":").map(Number);
+    return new Date(2000, 0, 1, hh, mm).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  }
+  const mapsLink = place => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
+  const ANSWERS = [["in", "In"], ["maybe", "Maybe"], ["out", "Out"]];
+
+  function scheduleView() {
+    const today = todayISO();
+    const upcoming = state.schedule.filter(g => g.date >= today);
+    const past = state.schedule.filter(g => g.date < today).reverse();
+    const manager = isManager();
+    return [
+      h("h2", { class: "section" }, "Upcoming",
+        manager && state.editing !== "new"
+          ? h("button", { class: "btn small", type: "button", onclick: () => { state.editing = "new"; render(); } }, "+ Add Game")
+          : null),
+      state.editing === "new" ? gameForm(null) : null,
+      upcoming.length
+        ? upcoming.map(g => (state.editing === g.id ? gameForm(g) : scheduleCard(g, manager)))
+        : (state.editing === "new" ? null : h("div", { class: "card empty" },
+            manager ? "No games on the schedule yet. Tap Add Game to add the next one." : "No games on the schedule yet. Your manager adds them here.")),
+      past.length ? h("details", { class: "fold past" },
+        h("summary", null, `Past games (${past.length})`),
+        past.slice(0, 20).map(g => (state.editing === g.id ? gameForm(g) : scheduleCard(g, manager, true)))) : null,
+    ];
+  }
+
+  function scheduleCard(g, manager, isPast = false) {
+    const answers = g.availability || {};
+    const mine = answers[me()]?.status || "";
+    const groups = { in: [], maybe: [], out: [] };
+    for (const [uid, a] of Object.entries(answers)) {
+      if (groups[a.status]) groups[a.status].push({ uid, name: a.name, note: a.note });
+    }
+    const answered = new Set(Object.keys(answers));
+    const noReply = state.members.filter(m => !answered.has(m.uid));
+    const d = parseDate(g.date);
+    const opp = g.opponent ? `${g.isHome ? "vs" : "@"} ${g.opponent}` : "Game";
+    const who = (label, list, cls) => list.length ? h("div", { class: "who-group" },
+      h("div", { class: `who-head ${cls}` }, `${label} · ${list.length}`),
+      h("div", { class: "who-names" }, list.map(p => h("span", { class: "who-name" }, p.name || "Player", p.note ? h("em", null, ` (${p.note})`) : null)))) : null;
+    return h("div", { class: `card sched${isPast ? " is-past" : ""}` },
+      h("div", { class: "sched-top" },
+        h("div", { class: "sched-date" },
+          h("span", { class: "dow" }, d ? d.toLocaleDateString(undefined, { weekday: "short" }) : ""),
+          h("span", { class: "day" }, d ? d.getDate() : ""),
+          h("span", { class: "mon" }, d ? d.toLocaleDateString(undefined, { month: "short" }) : "")),
+        h("div", { class: "sched-info" },
+          h("div", { class: "opp" }, opp),
+          h("div", { class: "meta" }, [g.time ? fmtTime(g.time) : "Time TBD", g.isHome ? "Home" : "Away"].join(" · ")),
+          g.location ? h("a", { class: "loc", href: mapsLink(g.location), target: "_blank", rel: "noopener" }, "📍 ", g.location) : null,
+          g.notes ? h("div", { class: "notes" }, g.notes) : null),
+        manager ? h("div", { class: "sched-admin" },
+          h("button", { class: "link-btn", type: "button", onclick: () => { state.editing = g.id; render(); } }, "Edit"),
+          h("button", { class: "link-btn danger", type: "button", onclick: e => {
+            if (confirm(`Delete ${opp} on ${fmtDate(g.date)}? Everyone's answers go with it.`)) action(() => deleteGame(g.id), { after: refreshNow })(e);
+          } }, "Delete")) : null),
+      isPast ? null : h("div", { class: "answer" },
+        h("span", { class: "answer-label" }, "Can you make it?"),
+        h("div", { class: "seg", role: "group", "aria-label": "Your availability" }, ANSWERS.map(([value, label]) =>
+          h("button", {
+            type: "button", class: `seg-btn ${value}${mine === value ? " on" : ""}`, "aria-pressed": String(mine === value),
+            onclick: action(() => answer(g.id, mine === value ? null : value), { after: refreshNow }),
+          }, label)))),
+      h("div", { class: "tally" },
+        h("span", { class: "t-in" }, `${groups.in.length} in`),
+        h("span", { class: "t-maybe" }, `${groups.maybe.length} maybe`),
+        h("span", { class: "t-out" }, `${groups.out.length} out`),
+        h("span", { class: "t-none" }, `${noReply.length} no reply`)),
+      h("details", { class: "who" }, h("summary", null, "Who's coming"),
+        who("In", groups.in, "in"), who("Maybe", groups.maybe, "maybe"), who("Out", groups.out, "out"),
+        who("No reply", noReply, "none")));
+  }
+
+  function gameForm(g) {
+    const f = g || { date: todayISO(), time: "", opponent: "", isHome: false, location: "", notes: "" };
+    const date = h("input", { type: "date", required: true, value: f.date, "aria-label": "Date" });
+    const time = h("input", { type: "time", value: f.time || "", "aria-label": "Time" });
+    const opponent = h("input", { type: "text", placeholder: "Opponent", maxlength: "80", value: f.opponent || "", "aria-label": "Opponent" });
+    const side = h("select", { "aria-label": "Home or away" },
+      h("option", { value: "away" }, "Away"), h("option", { value: "home" }, "Home"));
+    side.value = f.isHome ? "home" : "away";
+    const loc = h("input", { type: "text", placeholder: "Field / park", maxlength: "200", value: f.location || "", "aria-label": "Location" });
+    const notes = h("textarea", { placeholder: "Notes (arrival time, jersey color…)", maxlength: "500", rows: "2", "aria-label": "Notes" }, f.notes || "");
+    return h("form", {
+      class: "card game-form",
+      onsubmit: e => {
+        e.preventDefault();
+        action(async () => {
+          await saveGame(g?.id, { date: date.value, time: time.value, opponent: opponent.value.trim(), isHome: side.value === "home",
+                                  location: loc.value.trim(), notes: notes.value.trim() });
+          state.editing = null;
+        }, { after: refreshNow })(e);
+      },
+    },
+      h("div", { class: "form-title" }, g ? "Edit game" : "Add a game"),
+      h("div", { class: "row2" }, h("label", null, "Date", date), h("label", null, "Time", time)),
+      h("div", { class: "row2" }, h("label", null, "Opponent", opponent), h("label", null, "Home or away", side)),
+      h("label", null, "Location", loc),
+      h("label", null, "Notes", notes),
+      h("div", { class: "form-actions" },
+        h("button", { class: "btn ghost", type: "button", onclick: () => { state.editing = null; render(); } }, "Cancel"),
+        h("button", { class: "btn", type: "submit" }, g ? "Save" : "Add Game")));
+  }
+
+  function teamView() {
+    const manager = isManager();
+    const managers = new Set(state.team?.managers || []);
+    const invite = state.settings?.inviteCode ? `${SITE}?join=${state.settings.inviteCode}` : "";
+    const sorted = [...state.members].sort((a, b) => Number(managers.has(b.uid)) - Number(managers.has(a.uid)) || (a.name || "").localeCompare(b.name || ""));
+    return [
+      manager && invite ? [
+        h("h2", { class: "section" }, "Invite teammates"),
+        h("div", { class: "card pad" },
+          h("p", { class: "muted small", style: "margin-top:0" }, "Send this link to your team. They sign in with their email and they're on the team."),
+          h("div", { class: "codebox" }, invite),
+          h("div", { class: "form-actions start" }, copyButton(invite, "Copy Link"), shareButton(invite, `Join ${state.team.name} on Team Stats`),
+            h("button", { class: "btn small ghost", type: "button", onclick: e => {
+              if (confirm("Make a new invite link? The old one stops working.")) action(newInviteLink, { after: refreshNow })(e);
+            } }, "New Link"))),
+      ] : null,
+      h("h2", { class: "section" }, `Players (${state.members.length})`),
+      h("div", { class: "card roster" }, sorted.map(m => h("div", { class: "roster-row" },
+        h("div", { class: "rname" }, m.name || "Player",
+          managers.has(m.uid) ? h("span", { class: "pill mgr" }, "Manager") : null,
+          m.uid === me() ? h("span", { class: "you" }, "You") : null),
+        manager && m.uid !== me() ? h("div", { class: "radmin" },
+          h("button", { class: "link-btn", type: "button", onclick: action(() => setRoles(state.team.members,
+            managers.has(m.uid) ? [...managers].filter(x => x !== m.uid) : [...managers, m.uid]), { after: refreshNow }) },
+            managers.has(m.uid) ? "Remove manager" : "Make manager"),
+          h("button", { class: "link-btn danger", type: "button", onclick: e => {
+            if (confirm(`Remove ${m.name || "this player"} from ${state.team.name}?`)) action(() => removeMember(m.uid), { after: refreshNow })(e);
+          } }, "Remove")) : null))),
+      manager && state.settings?.scorerCode ? [
+        h("h2", { class: "section" }, "Keeping score in the app"),
+        h("div", { class: "card pad" },
+          h("p", { class: "muted small", style: "margin-top:0" },
+            "In Slow Pitch Book on the scorer's iPhone or iPad: Settings → Team websites → this team → I Have a Scorer Code. Stats from that device then appear here. Only give it to people who keep score."),
+          h("div", { class: "codebox big" }, showCode(state.settings.scorerCode)),
+          h("div", { class: "form-actions start" }, copyButton(showCode(state.settings.scorerCode), "Copy Code"))),
+      ] : null,
+      h("h2", { class: "section" }, "Team"),
+      h("div", { class: "card pad team-actions" },
+        manager ? h("button", { class: "btn small ghost", type: "button", onclick: e => {
+          const name = prompt("Team name:", state.team.name);
+          if (name && name.trim()) action(() => renameTeam(name.trim()), { after: refreshNow })(e);
+        } }, "Rename Team") : null,
+        DEMO ? null : h("button", { class: "btn small ghost", type: "button", onclick: e => {
+          if (manager && (state.team.managers || []).length <= 1) {
+            alert("You're the only manager. Make someone else a manager first, or delete the team.");
+            return;
+          }
+          if (confirm(`Leave ${state.team.name}? You'll need a new invite to come back.`)) {
+            action(leaveTeam, { after: () => { location.href = SITE; } })(e);
+          }
+        } }, "Leave Team"),
+        manager && !DEMO ? h("button", { class: "btn small danger", type: "button", onclick: e => {
+          const typed = prompt(`This deletes ${state.team.name} for everyone: schedule, answers, players and stats. Type the team name to confirm.`);
+          if (typed != null && typed.trim().toLowerCase() === state.team.name.trim().toLowerCase()) {
+            action(deleteTeam, { after: () => { location.href = SITE; } })(e);
+          }
+        } }, "Delete Team") : null),
     ];
   }
 
@@ -476,7 +1075,7 @@
 
     if (!state.games.length) {
       return [h("h2", { class: "section" }, "Games"),
-        h("div", { class: "card empty" }, "No games published yet. They'll show up here as soon as the scorer starts one.")];
+        h("div", { class: "card empty" }, "No stats yet. Games kept in the Slow Pitch Book app show up here once the scorer links the app (Team tab).")];
     }
     // Live games first, then the rest grouped by season / tournament like the app (newest group first,
     // games with no season last). Without any seasons it's one plain list.
@@ -512,7 +1111,7 @@
 
   function gameView(id) {
     const g = state.games.find(x => x.id === id);
-    if (!g) return [h("a", { class: "back", href: "#/" }, "‹ All games"), h("div", { class: "card empty", style: "margin-top:12px" }, "That game isn't on the website anymore.")];
+    if (!g) return [h("a", { class: "back", href: "#/games" }, "‹ All games"), h("div", { class: "card empty", style: "margin-top:12px" }, "That game isn't on the website anymore.")];
     if (g.isFinal) loadBook(g.id);
 
     const lines = (g.lines || []).filter(l => l.pa > 0 || l.r > 0 || l.crr > 0).map(derive);
@@ -530,7 +1129,7 @@
 
     const book = state.books[g.id];
     return [
-      h("a", { class: "back", href: "#/" }, "‹ All games"),
+      h("a", { class: "back", href: "#/games" }, "‹ All games"),
       h("div", { class: "board game-head" },
         h("div", { class: "status" }, g.isFinal ? status : h("span", { class: "pill live" }, "Live")),
         h("div", { class: "teams" },
@@ -634,13 +1233,25 @@
   // ---------- Render & refresh ----------
 
   function render() {
-    if (!state.key) return landingView();
+    if (!state.key) return homeView();
     const r = route();
     const y = window.scrollY;
-    const content = r.name === "game" ? gameView(r.id) : r.name === "stats" ? statsView() : r.name === "spray" ? sprayView() : gamesView();
+    const views = { schedule: scheduleView, games: gamesView, stats: statsView, spray: sprayView, team: teamView };
+    const content = r.name === "game" ? gameView(r.id) : views[r.name]();
     app.replaceChildren(...shell(r.name === "game" ? "games" : r.name, content));
     window.scrollTo(0, y);
-    document.title = `${state.board?.name || "Team"} Stats`;
+    document.title = `${state.team?.name || "Team"} · Team Stats`;
+  }
+
+  async function refreshNow() {
+    if (!state.key) return;
+    try {
+      const result = await load(state.key);
+      if (result === false) return notMemberView();
+    } catch (e) {
+      state.flash = e.message;
+    }
+    render();
   }
 
   let timer = null;
@@ -648,28 +1259,48 @@
     stopRefresh();
     if (DEMO) return;
     timer = setInterval(async () => {
-      if (document.visibilityState !== "visible" || !state.key) return;
-      try { if ((await load(state.key)) === "changed") render(); } catch { /* try again next time */ }
+      // Don't redraw under someone's fingers while they're filling in a form.
+      if (document.visibilityState !== "visible" || !state.key || state.editing) return;
+      try {
+        const result = await load(state.key);
+        if (result === false) { stopRefresh(); return notMemberView(); }
+        if (result === "changed") render();
+      } catch { /* try again next time */ }
     }, REFRESH_MS);
   }
   function stopRefresh() { if (timer) clearInterval(timer); timer = null; }
 
-  window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
+  window.addEventListener("hashchange", () => { state.editing = null; render(); window.scrollTo(0, 0); });
 
   async function start() {
-    if (!configured() || !TEAM) return landingView();
-    app.replaceChildren(h("div", { class: "lock" }, h("div", { class: "panel" }, h("p", null, "Loading stats…"))));
+    if (!configured()) {
+      return app.replaceChildren(panel(h("h1", null, "Team Stats"),
+        h("p", null, "This site isn't set up yet: fill in public/config.js with your Firebase project ID and web API key.")));
+    }
     try {
-      const ok = await load(TEAM);
-      if (!ok) {
-        forgetTeam(TEAM);
-        return landingView("That team link didn't open a team. It may have been deleted; ask your scorer for a new link.");
+      // Coming back from the emailed sign-in link.
+      if (!DEMO && params.get("mode") === "signIn" && params.get("oobCode")) {
+        const email = storage.get("statbook.pendingEmail");
+        if (!email) return finishSignInView(params.get("oobCode"));
+        try { await finishSignIn(email, params.get("oobCode")); } catch (e) { history.replaceState(null, "", returnURL()); return signInView(e.message); }
       }
-      if (!DEMO) rememberTeam(TEAM, state.board?.name);
+      if (!DEMO && !(await idToken())) return signInView();
+
+      app.replaceChildren(panel(h("p", null, "Loading…")));
+      await loadProfile();
+      if (!DEMO && !state.profile.name) return nameView();
+      if (JOIN) return joinView();
+      if (CLAIM) return claimView();
+      if (!TEAM) return homeView();
+
+      const ok = await load(TEAM);
+      if (!ok) return notMemberView();
+      if (!DEMO && !state.profile.teams[TEAM]) await addToMyTeams(TEAM, state.team.name);
       render();
       startRefresh();
     } catch (e) {
-      landingView(e.message || "Couldn't reach the stats server.");
+      app.replaceChildren(panel(h("h1", null, "Something went wrong"), h("p", null, e.message || "Couldn't reach the server."),
+        h("button", { class: "btn", type: "button", onclick: () => location.reload() }, "Try Again")));
     }
   }
 
