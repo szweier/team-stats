@@ -44,6 +44,7 @@ window.StatScorer = function (ctx) {
   const putRec = rec => idb("readwrite", st => st.put(rec));
   const getRec = id => idb("readonly", st => st.get(id));
   const allRecs = () => idb("readonly", st => st.getAll());
+  const dropRec = id => idb("readwrite", st => st.delete(id));
 
   /// Games this phone has (any team), by id. Filled at start and kept current.
   const recs = new Map();
@@ -100,7 +101,19 @@ window.StatScorer = function (ctx) {
     syncing.add(rec.id);
     repaint();
     try {
-      while (rec.pending.length) {
+      if (rec.kind === "solo") {
+        if (rec.owner !== me()) return;   // someone else's, from when they were signed in on this phone
+        const last = rec.pending[rec.pending.length - 1];
+        const g = JSON.parse(last.json);
+        await fs("POST", `${DOCS}:commit`, { body: { writes: [{ update: { name: `${DOCS}/users/${rec.owner}/solo/${rec.id}`,
+          fields: encFields({ json: last.json, rev: last.rev, date: g.date, isFinal: !!g.isFinal, updatedAt: Math.floor(Date.now() / 1000) }) } }] } });
+        rec.syncedRev = last.rev;
+        rec.pending = rec.pending.filter(p => p.rev > last.rev);
+        rec.syncedAt = Date.now();
+        rec.error = null;
+        await putRec(rec);
+      }
+      while (rec.kind !== "solo" && rec.pending.length) {
         const chunk = rec.pending.slice(0, 200);
         const last = chunk[chunk.length - 1];
         const g = JSON.parse(last.json);
@@ -176,6 +189,14 @@ window.StatScorer = function (ctx) {
     return { game: JSON.parse(f.json), rev: f.rev, scorer: f.scorer, scorerName: f.scorerName, updatedAt: f.updatedAt, updateTime: d.updateTime };
   }
 
+  /// The full scored game (every play) for the drawn scorebook: this phone's copy if it has one, else the online copy.
+  async function scoredGame(teamId, id) {
+    const rec = recs.get(id);
+    if (rec) return rec.game;
+    if (DEMO) return null;
+    try { return (await readRemote(teamId, id))?.game || null; } catch { return null; }
+  }
+
   // ---------- Small UI helpers ----------
 
   let paintScheduled = false;
@@ -192,10 +213,13 @@ window.StatScorer = function (ctx) {
   };
   const members = rec => (rec.teamId === state.key && state.members.length ? state.members : rec.members || []);
   /// A typed name that matches a teammate's links to their account, like the app.
-  function linkedPlayer(rec, name) {
+  function linkedPlayer(rec, name, depth = 0) {
     const n = name.trim();
     const list = rec ? members(rec) : state.members;
     const links = (rec && rec.teamId !== state.key ? rec.links : state.links) || [];
+    const renames = (rec && rec.teamId !== state.key ? rec.names : state.names) || [];
+    const to = renames.find(r => r.from.trim().toLowerCase() === n.toLowerCase())?.to;
+    if (to && depth < 5) return linkedPlayer(rec, to, depth + 1);
     const key = n.toLowerCase();
     const viaLink = links.find(l => l.name.trim().toLowerCase() === key);
     const m = list.find(x => (x.name || "").trim().toLowerCase() === key) || (viaLink && list.find(x => x.uid === viaLink.uid));
@@ -222,8 +246,80 @@ window.StatScorer = function (ctx) {
   }
   const BASE_SPOT = { 1: [0.212, 0.212], 2: [0, 0.424], 3: [-0.212, 0.212] };
 
+  // ---------- Play animation (like the app's PlayAnimationLayer): the ball flies out, then runners move ----------
+
+  let anim = null;   // { ball, ballDuration, movers: [{ name, start, end, to }], runDuration, start, done }
+  const reducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const CORNERS = [[0, 0], [21.2, -21.2], [0, -42.4], [-21.2, -21.2]];
+  /// Along the base paths: 0 = home, 1 = first, 2 = second, 3 = third, 4 = home.
+  function pathPoint(i) {
+    const k = Math.floor(i), f = i - k;
+    const a = CORNERS[((k % 4) + 4) % 4], b = CORNERS[(((k + 1) % 4) + 4) % 4];
+    return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f];
+  }
+  const baseIndex = b => (b === HOME ? 4 : b);
+
+  /// Plays an animation on the live field (taps wait for it), then calls `done`.
+  function animate(a, done) {
+    if (reducedMotion() || (!a.ball && !a.movers?.length)) { done?.(); render(); return; }
+    anim = { ballDuration: 0, movers: [], runDuration: 0, ...a, start: performance.now(), done };
+    render();
+    requestAnimationFrame(tick);
+  }
+  function tick(now) {
+    if (!anim) return;
+    const t = (now - anim.start) / 1000;
+    const layer = document.querySelector(".tap-field .anim-layer");
+    if (layer) drawAnim(layer, t);
+    if (t >= anim.ballDuration + anim.runDuration) {
+      const done = anim.done;
+      anim = null;
+      done?.();
+      render();
+      return;
+    }
+    requestAnimationFrame(tick);
+  }
+  function drawAnim(layer, t) {
+    const clamp = x => Math.min(1, Math.max(0, x));
+    layer.replaceChildren();
+    if (anim.ball) {
+      const p = anim.ballDuration > 0 ? clamp(t / anim.ballDuration) : 1;
+      const e = 1 - (1 - p) * (1 - p);
+      const tx = E.pointX(anim.ball) * 100, ty = -E.pointY(anim.ball) * 100;
+      const x = tx * e, y = ty * e;
+      const lift = Math.sin(Math.PI * e) * Math.min(30, 40 * anim.ball.distance);
+      layer.append(svgEl("ellipse", { cx: x, cy: y, rx: 2.6, ry: 1, fill: "#000", "fill-opacity": 0.25 }),
+        svgEl("circle", { cx: x, cy: y - lift, r: 2.6 * (1 + 0.6 * Math.sin(Math.PI * e)), fill: "#fff", stroke: "#d91f26", "stroke-opacity": 0.8, "stroke-width": 0.5 }));
+    }
+    const f = anim.runDuration > 0 ? clamp((t - anim.ballDuration) / anim.runDuration) : 1;
+    const eased = f < 0.5 ? 2 * f * f : 1 - Math.pow(-2 * f + 2, 2) / 2;
+    for (const m of anim.movers) {
+      const [x, y] = pathPoint(m.start + (m.end - m.start) * eased);
+      const isOut = m.to === OUT && f >= 0.95, scored = m.to === HOME && f >= 0.95;
+      const label = isOut ? `${m.name} OUT` : m.name;
+      const w = Math.min(50, 5 + label.length * 2.6);
+      layer.append(svgEl("rect", { x: x - w / 2, y: y - 10, width: w, height: 7, rx: 3.5, fill: isOut ? "#d91f26" : scored ? "#2e9e3e" : "#d9f23a", stroke: "#000", "stroke-opacity": 0.25, "stroke-width": 0.4 }),
+        svgEl("text", { x, y: y - 6.5, "font-size": 4, "text-anchor": "middle", "dominant-baseline": "central", fill: isOut ? "#fff" : "#111",
+          "font-weight": 700, "font-family": "ui-rounded, system-ui, sans-serif" }, label.length > 18 ? label.slice(0, 17) + "…" : label));
+    }
+  }
+
+  /// The runners (and batter) a play moves, for the animation.
+  function moversFor(g, play) {
+    const name = id => E.nameFor(g, id);
+    const movers = (play.runners || []).map(m => ({ name: name(m.playerID), start: m.from, end: m.to === OUT ? m.from + 0.5 : baseIndex(m.to), to: m.to }));
+    if (!["strikeoutLooking", "strikeoutSwinging", "strikeoutFoul", "homeRunOut"].includes(play.result)) {
+      movers.push({ name: name(play.batterID), start: 0, end: play.batterTo === OUT ? 0.5 : baseIndex(play.batterTo), to: play.batterTo });
+    }
+    return movers.filter(m => m.end > m.start);
+  }
+
   /// The field: tap anywhere to place the ball, tap a runner for a courtesy runner.
-  function tapField({ marker, runners = {}, onTap, onRunner, compact, shrink }) {
+  function tapField({ marker, runners = {}, onTap, onRunner, compact, shrink, live }) {
+    const playing = live && anim;
+    if (playing && anim.ballDuration > 0) marker = null;   // the ball is still in the air
+    if (playing && anim.movers.length) runners = {};       // the runners are on the move
     // While picking what happened, the field gives up room so every choice stays on screen.
     const svg = svgEl("svg", { viewBox: "-80 -114 160 118", class: `field tap-field${compact ? " compact" : ""}${shrink ? " shrink" : ""}` });
     svg.innerHTML = fieldSVG([]);
@@ -242,7 +338,14 @@ window.StatScorer = function (ctx) {
         svgEl("circle", { cx: bx * 100, cy: -by * 100, r: 3, fill: "#d9f23a", stroke: "#111", "stroke-width": 0.6 }));
       svg.append(g);
     }
+    if (playing) {
+      svg.classList.add("animating");
+      const layer = svgEl("g", { class: "anim-layer", "pointer-events": "none" });
+      svg.append(layer);
+      drawAnim(layer, (performance.now() - anim.start) / 1000);
+    }
     svg.addEventListener("click", ev => {
+      if (live && anim) return;   // taps wait for the animation
       const runner = ev.target.closest?.("[data-base]");
       if (runner && onRunner) return onRunner(Number(runner.getAttribute("data-base")));
       if (!onTap) return;
@@ -330,8 +433,108 @@ window.StatScorer = function (ctx) {
             h("span", { class: "badge LIVE" }, "LIVE"))))] : null,
       can && !mine.length && !others.length && !scheduled.length ? h("div", { class: "card empty" },
         manager ? "No games being scored. Tap New Game, or set a lineup on a scheduled game." : "Nothing to score yet. Once a manager sets the lineup on today's game, it shows here.") : null,
+      manager && !storageError ? importPanel() : null,
       h("div", { class: "legend" }, "Every tap is saved on this phone first, then uploaded. If you lose signal, keep scoring: it uploads when you're back online. Adding this site to your Home Screen keeps your saved games safest."),
     ];
+  }
+
+  // ---------- Deleting a game (admins) ----------
+
+  /// Removes a game everywhere: its scoring history, the published game and scorebook, and this phone's copy.
+  async function deleteGameEverywhere(teamId, id) {
+    clearTimeout(timers.get(id));
+    if (!DEMO) {
+      const revs = await ctx.listDocs(`teams/${teamId}/scoring/${id}/revs`, [["mask.fieldPaths", "rev"]]).catch(() => []);
+      for (const r of revs) await fs("DELETE", `teams/${teamId}/scoring/${id}/revs/${r.id}`);
+      for (const path of [`teams/${teamId}/scoring/${id}`, `teams/${teamId}/games/${id}`, `teams/${teamId}/books/${id}`]) await fs("DELETE", path);
+    }
+    recs.delete(id);
+    await dropRec(id).catch(() => {});
+    remoteList = (remoteList || []).filter(r => r.id !== id);
+  }
+
+  async function confirmDeleteGame(teamId, id, label) {
+    if (!confirm(`Delete ${label}? Its plays, stats and scorebook are removed from the website for everyone, and can't be brought back.`)) return false;
+    await deleteGameEverywhere(teamId, id);
+    return true;
+  }
+
+  // ---------- Import from the app (Settings → Export Games for the Website) ----------
+
+  const imp = { games: null, chosen: new Set(), busy: false, done: null, error: null, already: new Set() };
+  const sameTeam = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+
+  async function readExport(file) {
+    imp.error = null; imp.done = null; imp.games = null;
+    try {
+      const data = JSON.parse(await file.text());
+      if (data?.format !== "statbook-export" || !Array.isArray(data.games)) throw new Error("That isn't a file from the app's Export Games for the Website.");
+      // Keep only well-formed games (anything odd is skipped rather than half-imported).
+      imp.games = data.games.filter(g => g && typeof g.id === "string" && Array.isArray(g.lineup) && Array.isArray(g.plays) && g.lineup.length)
+        .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      // Already on the website (imported before, or being scored here): don't import twice.
+      imp.already = new Set([...recs.keys()]);
+      if (!DEMO) {
+        const rows = await ctx.listDocs(`teams/${state.key}/scoring`, [["mask.fieldPaths", "rev"]]).catch(() => []);
+        for (const r of rows) imp.already.add(r.id);
+      }
+      imp.chosen = new Set(imp.games.filter(g => !g.isSolo && sameTeam(g.team, state.team?.name) && !imp.already.has(g.id)).map(g => g.id));
+    } catch (e) {
+      imp.error = e.message || "Couldn't read that file.";
+    }
+    render();
+  }
+
+  async function runImport() {
+    imp.busy = true; render();
+    let n = 0;
+    for (const g of imp.games.filter(x => imp.chosen.has(x.id))) {
+      const game = structuredClone(g);
+      game.team = state.team?.name || game.team;   // same team, spelled the way the website has it
+      const rec = { id: game.id, teamId: state.key, teamName: state.team?.name || "", members: state.members.map(m => ({ uid: m.uid, name: m.name })),
+        links: state.links || [], game, rev: 0, syncedRev: 0, pending: [], updateTime: null, conflict: null, error: null,
+        createdAt: Date.now(), savedAt: Date.now(), imported: true };
+      recs.set(rec.id, rec);
+      if (await change(rec, () => true)) { n++; imp.already.add(rec.id); imp.chosen.delete(rec.id); }
+      else recs.delete(rec.id);
+    }
+    imp.busy = false;
+    imp.done = n;
+    render();
+  }
+
+  function importPanel() {
+    const team = state.team?.name || "this team";
+    const picker = h("input", { type: "file", accept: ".json,application/json", class: "file-input", "aria-label": "Choose the exported file",
+      onchange: e => { const f = e.target.files?.[0]; if (f) readExport(f); } });
+    const head = h("details", { class: "fold import", open: imp.games || imp.error ? true : null },
+      h("summary", null, "Import games from the app"),
+      h("p", { class: "muted small" }, "In the Stat Book app: Settings → Export Games for the Website, then save or send the file to this phone and pick it here. Games come in play by play, so they can be edited here; anything already on the website is skipped."),
+      h("label", { class: "btn small ghost file-btn" }, "Choose File…", picker),
+      imp.error ? h("div", { class: "notice" }, imp.error) : null,
+      imp.done != null ? h("div", { class: "muted" }, `${imp.done} game${imp.done === 1 ? "" : "s"} imported. They upload in the background; the badge on each shows when it's done.`) : null);
+    if (!imp.games) return head;
+    const ours = imp.games.filter(g => !g.isSolo && sameTeam(g.team, state.team?.name));
+    const otherTeams = [...new Set(imp.games.filter(g => !g.isSolo && !sameTeam(g.team, state.team?.name)).map(g => g.team || "No team"))];
+    const solo = imp.games.filter(g => g.isSolo);
+    const row = g => {
+      const s = E.state(g), done = imp.already.has(g.id);
+      return h("label", { class: `lineup-row${done ? " off" : ""}` },
+        h("span", { class: "lineup-check" },
+          h("input", { type: "checkbox", disabled: done || imp.busy || null, checked: imp.chosen.has(g.id) || null,
+            onchange: e => { e.target.checked ? imp.chosen.add(g.id) : imp.chosen.delete(g.id); render(); } }),
+          h("span", null, `${fmtDate(g.date)} · ${g.opponent ? (g.isHome ? "vs " : "@ ") + g.opponent : "Game"}`,
+            h("span", { class: "muted small" }, done ? " · already on the website" : ` · ${s.runs}–${E.opponentTotal(g)}${g.isFinal ? "" : " (not finished)"}`))));
+    };
+    head.append(
+      ours.length ? [h("div", { class: "k" }, `${team} (${ours.length})`), h("div", { class: "card lineup-list" }, ours.map(row))]
+        : h("p", null, `None of the games in this file are ${team}'s.`),
+      otherTeams.length ? h("p", { class: "muted small" }, `Also in the file: ${otherTeams.join(", ")}. Open that team's page here to import its games.`) : null,
+      solo.length ? h("p", { class: "muted small" }, `${solo.length} one-player game${solo.length === 1 ? "" : "s"}: import them from My Stats → Tracked Players.`) : null,
+      ours.length ? h("div", { class: "form-actions start" },
+        h("button", { class: "btn small", type: "button", disabled: !imp.chosen.size || imp.busy || null, onclick: runImport },
+          imp.busy ? "Importing…" : `Import ${imp.chosen.size} Game${imp.chosen.size === 1 ? "" : "s"}`)) : null);
+    return head;
   }
 
   // ---------- New game ----------
@@ -418,7 +621,7 @@ window.StatScorer = function (ctx) {
       d.write = "";
       render();
     };
-    const writeIn = h("input", { type: "text", placeholder: "Add a fill-in or late arrival", maxlength: "80", value: d.write,
+    const writeIn = h("input", { type: "text", placeholder: "Add a fill-in or late arrival", maxlength: "80", value: d.write, list: namesList(),
       "aria-label": "Add a player", oninput: e => { d.write = e.target.value; },
       onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); addWriteIn(); } } });
     return [
@@ -526,7 +729,7 @@ window.StatScorer = function (ctx) {
 
   async function createGame(g) {
     const rec = { id: g.id, teamId: state.key, teamName: state.team?.name || "", members: state.members.map(m => ({ uid: m.uid, name: m.name })),
-      links: state.links || [], game: g, rev: 0, syncedRev: 0, pending: [], updateTime: null, conflict: null, error: null,
+      links: state.links || [], names: state.names || [], game: g, rev: 0, syncedRev: 0, pending: [], updateTime: null, conflict: null, error: null,
       createdAt: Date.now(), savedAt: Date.now() };
     recs.set(rec.id, rec);
     const ok = await change(rec, () => true);   // revision 1: saved here, then uploaded
@@ -678,12 +881,14 @@ window.StatScorer = function (ctx) {
       review ? h("button", { type: "button", class: "review-badge", onclick: () => { ui.sheet = { type: "box" }; render(); } },
         `⚠ ${review} play${review === 1 ? "" : "s"} need review`) : null,
       tapField({
-        marker: ui.spot, runners, shrink: ui.step !== "main",
+        marker: ui.spot, runners, shrink: ui.step !== "main", live: true,
         onTap: p => {
           ui.spot = p;
           ui.fielder = E.suggestedFielder(p);
-          ui.step = !E.isFair(p) ? "out" : E.isOverFence(p) ? "overFence" : "inPlay";
-          render();
+          // Fly the ball out there first; the choices appear once it lands.
+          animate({ ball: p, ballDuration: E.isOverFence(p) ? 0.75 : 0.5 }, () => {
+            ui.step = !E.isFair(p) ? "out" : E.isOverFence(p) ? "overFence" : "inPlay";
+          });
         },
         onRunner: base => { ui.sheet = { type: "courtesy", base }; render(); },
       }),
@@ -775,11 +980,15 @@ window.StatScorer = function (ctx) {
     resetTap();
     ui.sheet = null;
     const ok = await change(rec, g => { g.plays.push(play); });
-    if (ok) {
-      navigator.vibrate?.(15);
-      if (E.state(rec.game).inning > before.inning) ui.inningCheck = before;
-    }
-    render();
+    if (!ok) return render();
+    navigator.vibrate?.(15);
+    const endedInning = E.state(rec.game).inning > before.inning;
+    // Saved first; then the runners move to where the play put them.
+    const movers = moversFor(rec.game, play);
+    const longest = Math.max(0, ...movers.map(m => m.end - m.start));
+    animate(movers.length ? { ball: play.location || null, movers, runDuration: Math.min(1.4, Math.max(0.5, 0.35 * longest)) } : {}, () => {
+      if (endedInning) ui.inningCheck = before;
+    });
   }
 
   async function undo(rec) {
@@ -1003,7 +1212,7 @@ window.StatScorer = function (ctx) {
         h("div", { class: "pick-list" }, teammates.map(m => btn(m.name, () => pick({ id: E.newID(), name: m.name, member: m.uid }), "soft")))] : null,
       h("div", { class: "k" }, "Someone else"),
       h("div", { class: "pin-search" },
-        h("input", { type: "text", placeholder: "Name", maxlength: "80", oninput: e => { typed = e.target.value; },
+        h("input", { type: "text", placeholder: "Name", maxlength: "80", list: namesList(), oninput: e => { typed = e.target.value; },
           onkeydown: e => { if (e.key === "Enter" && typed.trim()) pick(linkedPlayer(rec, typed)); } }),
         btn("Use", () => { if (typed.trim()) pick(linkedPlayer(rec, typed)); }, "soft")),
     ]);
@@ -1043,7 +1252,14 @@ window.StatScorer = function (ctx) {
         if (E.state(rec.game).inning > inning) ui.breakAfter = inning;
         render();
       }, "menu-item", { disabled: !E.canEndInning(g) || null }),
-      btn(g.isFinal ? "Reopen Game" : "End Game", g.isFinal ? async () => { ui.sheet = null; await change(rec, x => { x.isFinal = false; }); render(); } : go("end"), "menu-item danger")));
+      btn(g.isFinal ? "Reopen Game" : "End Game", g.isFinal ? async () => { ui.sheet = null; await change(rec, x => { x.isFinal = false; }); render(); } : go("end"), "menu-item danger"),
+      ctx.isManager() ? btn("Delete Game", async e => {
+        e.currentTarget.disabled = true;
+        try {
+          if (await confirmDeleteGame(rec.teamId, rec.id, gameTitle(g))) { ui.sheet = null; location.hash = "#/score"; await ctx.refreshNow(); return; }
+        } catch (err) { alert(err.message || "Couldn't delete that game. Try again."); }
+        e.currentTarget.disabled = false;
+      }, "menu-item danger") : null));
   }
 
   function endSheet(rec, g) {
@@ -1065,6 +1281,7 @@ window.StatScorer = function (ctx) {
       h("div", { class: "board game-head" }, scorePair(g, s)),
       lineScore(E.publishedGame(g)),
       lines.length ? statsTable(BATTING, lines) : null,
+      window.StatBook ? StatBook.panel(g) : null,
       h("div", { class: "k" }, "Plays · tap to edit"),
       h("div", { class: "card pbp" }, [...byInning.entries()].map(([inn, plays]) => [
         h("div", { class: "inn" }, `${ordinal(inn)} inning`),
@@ -1120,13 +1337,13 @@ window.StatScorer = function (ctx) {
         h("p", { class: "muted small" }, "They take this spot in the batting order. Both players keep their own stats."),
         available.length ? h("div", { class: "pick-list" }, available.map(m => btn(m.name, () => substitute({ id: E.newID(), name: m.name, member: m.uid }), "soft"))) : null,
         h("div", { class: "pin-search" },
-          h("input", { type: "text", placeholder: "New player's name", maxlength: "80", value: w.subName, oninput: e => { w.subName = e.target.value; } }),
+          h("input", { type: "text", placeholder: "New player's name", maxlength: "80", list: namesList(), value: w.subName, oninput: e => { w.subName = e.target.value; } }),
           btn("Sub In", () => { if (w.subName.trim()) substitute(linkedPlayer(rec, w.subName)); }, "soft"),
           btn("Cancel", () => { w.subFor = null; render(); }, "soft"))) : null,
       !finished ? [h("div", { class: "k" }, "Add a late arrival"),
         available.length ? h("div", { class: "pick-list" }, available.map(m => btn(`+ ${m.name}`, () => addPlayer({ id: E.newID(), name: m.name, member: m.uid }), "soft"))) : null,
         h("div", { class: "pin-search" },
-          h("input", { type: "text", placeholder: "Name", maxlength: "80", value: w.add, oninput: e => { w.add = e.target.value; } }),
+          h("input", { type: "text", placeholder: "Name", maxlength: "80", list: namesList(), value: w.add, oninput: e => { w.add = e.target.value; } }),
           btn("Add", () => { if (w.add.trim()) addPlayer(linkedPlayer(rec, w.add)); }, "soft"))] : null,
       w.bench.length ? [h("div", { class: "k" }, "Subbed out"), h("div", { class: "card lineup-list" }, w.bench.map(p => h("div", { class: "lineup-row" }, nameInput(p))))] : null,
       w.extras.length ? [h("div", { class: "k" }, "Courtesy runners"), h("div", { class: "card lineup-list" }, w.extras.map(p => h("div", { class: "lineup-row" }, nameInput(p))))] : null,
@@ -1197,12 +1414,326 @@ window.StatScorer = function (ctx) {
     ]);
   }
 
+  // ---------- One-player games (like the app's Track One Player) ----------
+  //
+  // When the whole book can't be kept, track just one hitter's at-bats. They're ordinary games with isSolo set and a
+  // one-player lineup, kept private to the account that tracks them (users/{uid}/solo/{game}), saved on this phone
+  // first like every other game. They count toward that player's My Stats, never the team's record.
+
+  const soloRecs = () => [...recs.values()].filter(r => r.kind === "solo" && (DEMO || r.owner === me()))
+    .sort((a, b) => (b.game.date || "").localeCompare(a.game.date || "") || (b.savedAt || 0) - (a.savedAt || 0));
+
+  /// "2-for-3 · HR · 2 RBI · 1 R" for the tracked player.
+  function soloLine(g) {
+    const l = E.statLines(g)[0];
+    if (!l || !l.pa) return "No at-bats yet";
+    const parts = [`${l.hits}-for-${l.ab}`];
+    const add = (n, label) => { if (n === 1) parts.push(label); else if (n > 1) parts.push(`${n} ${label}`); };
+    add(l.doubles, "2B"); add(l.triples, "3B"); add(l.homeRuns, "HR"); add(l.walks, "BB"); add(l.kLooking + l.kSwinging + l.kFoul, "K");
+    if (l.rbi) parts.push(`${l.rbi} RBI`);
+    if (l.runs) parts.push(`${l.runs} R`);
+    return parts.join(" · ");
+  }
+
+  /// Every name in this team's book (after renames) plus teammates, for picking the same spelling again.
+  function knownNames() {
+    const names = new Map();
+    const add = n => { const t = String(n || "").trim(); if (t && !names.has(t.toLowerCase())) names.set(t.toLowerCase(), t); };
+    add(state.profile?.name);
+    for (const m of state.members || []) add(m.name);
+    for (const g of state.games || []) for (const l of g.lines || []) add(l.name);
+    for (const r of soloRecs()) add(r.game.lineup[0]?.name);
+    return [...names.values()].sort((a, b) => a.localeCompare(b));
+  }
+  /// The suggestions every player-name box offers (kept outside the page so redraws don't drop them); returns its id.
+  function namesList() {
+    let list = document.getElementById("known-names");
+    if (!list) { list = h("datalist", { id: "known-names" }); document.body.append(list); }
+    list.replaceChildren(...knownNames().map(n => h("option", { value: n })));
+    return "known-names";
+  }
+  /// The tracked player is you when the name is the one you go by.
+  const soloPlayer = name => {
+    const mine = (state.profile?.name || "").trim().toLowerCase();
+    return { id: E.newID(), name, ...(mine && name.toLowerCase() === mine && !DEMO ? { member: me() } : {}) };
+  };
+
+  // Games tracked on another phone (or before this one) come down when the list opens.
+  let soloPulled = false;
+  async function pullSolo() {
+    if (DEMO || soloPulled || !me()) return;
+    soloPulled = true;
+    try {
+      const rows = await ctx.listDocs(`users/${me()}/solo`);
+      let changed = false;
+      for (const r of rows) {
+        const mine = recs.get(r.id);
+        if (mine && (mine.pending.length || mine.rev >= (r.rev || 0))) continue;
+        let game; try { game = JSON.parse(r.json); } catch { continue; }
+        const rec = { id: r.id, kind: "solo", owner: me(), teamId: null, game, rev: r.rev || 0, syncedRev: r.rev || 0, pending: [],
+          updateTime: null, conflict: null, error: null, createdAt: Date.now(), savedAt: Date.now() };
+        recs.set(rec.id, rec);
+        await putRec(rec).catch(() => {});
+        changed = true;
+      }
+      if (changed) repaint();
+    } catch { soloPulled = false; }
+  }
+
+  async function newSoloGame(d) {
+    const name = d.name.trim();
+    const game = { id: E.newID(), date: d.date || todayISO(), team: d.team.trim(), opponent: d.opponent.trim(), lineup: [soloPlayer(name)],
+      bench: [], extras: [], subs: {}, courtesySwaps: [], opponentRuns: {}, plays: [], isFinal: false, isHome: d.isHome, isSolo: true,
+      event: d.eventKind && d.eventName.trim() ? { kind: d.eventKind, name: d.eventName.trim() } : null };
+    const rec = { id: game.id, kind: "solo", owner: me(), teamId: null, game, rev: 0, syncedRev: 0, pending: [], updateTime: null,
+      conflict: null, error: null, createdAt: Date.now(), savedAt: Date.now() };
+    recs.set(rec.id, rec);
+    if (!(await change(rec, () => true))) { recs.delete(rec.id); return null; }
+    return rec.id;
+  }
+
+  async function deleteSolo(rec) {
+    if (!confirm(`Delete this game of ${rec.game.lineup[0]?.name || "the player"}'s? It can't be brought back.`)) return false;
+    clearTimeout(timers.get(rec.id));
+    if (!DEMO) await fs("DELETE", `users/${rec.owner}/solo/${rec.id}`).catch(() => {});
+    recs.delete(rec.id);
+    await dropRec(rec.id).catch(() => {});
+    return true;
+  }
+
+  /// The game details form: starting a new one-player game, or fixing one's details.
+  function soloDetailsForm(d, { submitText, onSubmit, onCancel }) {
+    const set = k => e => { d[k] = e.target.type === "checkbox" ? e.target.checked : e.target.value; };
+    const homeSel = h("select", { onchange: e => { d.isHome = e.target.value === "home"; } },
+      h("option", { value: "away" }, "Away"), h("option", { value: "home" }, "Home"));
+    homeSel.value = d.isHome ? "home" : "away";
+    const kindSel = h("select", { onchange: e => { d.eventKind = e.target.value; render(); } },
+      h("option", { value: "" }, "None"), h("option", { value: "season" }, "Season"), h("option", { value: "tournament" }, "Tournament"));
+    kindSel.value = d.eventKind || "";
+    return h("div", { class: "card game-form" },
+      h("label", null, "Player's name", h("input", { type: "text", maxlength: "80", value: d.name, list: namesList(), placeholder: "Pick a name to keep the same spelling",
+        "aria-label": "Player's name", oninput: e => { d.name = e.target.value; } })),
+      h("div", { class: "row2" },
+        h("label", null, "Their team (optional)", h("input", { type: "text", maxlength: "80", value: d.team, oninput: set("team") })),
+        h("label", null, "Opponent", h("input", { type: "text", maxlength: "80", value: d.opponent, "aria-label": "Opponent", oninput: set("opponent") }))),
+      h("div", { class: "row2" },
+        h("label", null, "Date", h("input", { type: "date", value: d.date, onchange: set("date") })),
+        h("label", null, "Their team was", homeSel)),
+      h("div", { class: "row2" },
+        h("label", null, "Season or tournament", kindSel),
+        d.eventKind ? h("label", null, d.eventKind === "tournament" ? "Tournament name" : "Season name",
+          h("input", { type: "text", maxlength: "60", value: d.eventName, placeholder: d.eventKind === "tournament" ? "Labor Day Classic" : "Fall 2026", oninput: set("eventName") }))
+          : h("span")),
+      h("div", { class: "form-actions" },
+        onCancel ? h("button", { class: "btn ghost", type: "button", onclick: onCancel }, "Cancel") : null,
+        h("button", { class: "btn", type: "button", onclick: async e => {
+          if (!d.name.trim()) { alert("Enter the player's name."); return; }
+          e.currentTarget.disabled = true;
+          await onSubmit();
+        } }, submitText)));
+  }
+
+  const soloDraft = { open: false };
+  function freshSoloDraft() {
+    const last = soloRecs()[0]?.game;
+    return { open: true, name: "", team: last?.team ?? state.team?.name ?? "", opponent: "", isHome: false, date: todayISO(),
+      eventKind: last?.event?.kind || "", eventName: last?.event?.name || "" };
+  }
+
+  /// My Stats → Tracked Players: one-player games, and starting a new one.
+  function soloSection() {
+    if (storageError) return null;
+    pullSolo();
+    const list = soloRecs();
+    return [
+      h("h2", { class: "section" }, "Tracked Players",
+        !soloDraft.open ? h("button", { class: "btn small", type: "button", onclick: () => { Object.assign(soloDraft, freshSoloDraft()); render(); } }, "+ Track One Player") : null),
+      soloDraft.open ? soloDetailsForm(soloDraft, {
+        submitText: "Start",
+        onCancel: () => { soloDraft.open = false; render(); },
+        onSubmit: async () => { const id = await newSoloGame(soloDraft); soloDraft.open = false; if (id) location.hash = `#/solo/${id}`; else render(); },
+      }) : null,
+      list.length ? h("div", { class: "card games", style: "gap:0;overflow:hidden" }, list.map(r => {
+        const g = r.game, sync = syncText(r);
+        return h("a", { class: "game-row", href: `#/solo/${r.id}` },
+          h("span", { class: `badge solo${g.isFinal ? "" : " live"}`, "aria-hidden": "true" }, "1"),
+          h("div", null, h("div", { class: "who" }, g.lineup[0]?.name || "Player"),
+            h("div", { class: "when" }, `${fmtDate(g.date)} · ${gameTitle(g)}${g.isFinal ? "" : " · in progress"}`),
+            h("div", { class: "when" }, soloLine(g))),
+          h("span", { class: `sync-dot ${sync.cls}`, title: sync.text }));
+      })) : !soloDraft.open ? h("div", { class: "legend" }, "Can't keep the whole book? Track just one hitter's at-bats. Those games count toward their stats here, but not the team's record.") : null,
+      soloImportPanel(),
+    ];
+  }
+
+  // One at-bat (new or editing), like the app's AtBatView.
+  const AB_GROUPS = [
+    ["Hit", [["Single", "single"], ["Double", "double"], ["Triple", "triple"], ["Home Run", "homeRun"]]],
+    ["Out", [["Fly", "out", "fly"], ["Line", "out", "line"], ["Ground", "out", "ground"], ["Pop", "out", "pop"], ["Sac Fly", "sacrificeFly", "fly"], ["HR Out", "homeRunOut"]]],
+    ["Reached", [["Walk", "walk"], ["Error", "reachedOnError"], ["FC", "fieldersChoice"]]],
+    ["Strikeout", [["Looking", "strikeoutLooking"], ["Swinging", "strikeoutSwinging"], ["Foul", "strikeoutFoul"]]],
+  ];
+  const NO_BALL = new Set(["walk", "strikeoutLooking", "strikeoutSwinging", "strikeoutFoul"]);
+
+  function atBatSheet(rec, sh) {
+    const g = rec.game;
+    if (!sh.work) {
+      const p = sh.index != null ? g.plays[sh.index] : null;
+      sh.work = p ? { result: p.result, outType: p.outType || null, location: p.location || null, fielder: p.fielder || null, rbi: p.rbi, scored: p.batterTo === HOME }
+        : { result: null, outType: null, location: null, fielder: null, rbi: 0, scored: false };
+    }
+    const w = sh.work;
+    const ballInPlay = !w.result || !NO_BALL.has(w.result);
+    const outDetail = w.result === "out" || w.result === "sacrificeFly";
+    const canScore = !!w.result && !E.batterIsOut(w.result) && w.result !== "homeRun";
+    const pick = (result, outType) => {
+      w.result = result; w.outType = outType || null;
+      if ((result === "homeRun" || result === "sacrificeFly") && !w.rbi) w.rbi = 1;
+      if (E.batterIsOut(result)) w.scored = false;
+      render();
+    };
+    const save = async () => {
+      if (!w.result) return;
+      const r = w.result;
+      const existing = sh.index != null ? g.plays[sh.index] : null;
+      const play = { id: existing?.id || E.newID(), inning: 1, batterID: g.lineup[0].id, result: r,
+        batterTo: E.batterIsOut(r) ? OUT : (r === "homeRun" || w.scored ? HOME : E.defaultBatterBase(r)), runners: [], rbi: w.rbi,
+        outType: outDetail ? w.outType : null, fielder: outDetail ? w.fielder : null, location: ballInPlay ? w.location : null, endsInning: false };
+      const ok = await change(rec, x => { if (existing) x.plays[sh.index] = play; else x.plays.push(play); });
+      if (ok) { ui.sheet = null; render(); }
+    };
+    const fielderSel = h("select", { "aria-label": "Fielder", onchange: e => { w.fielder = e.target.value || null; } },
+      h("option", { value: "" }, "—"), E.FIELDER_ORDER.map(f => h("option", { value: f }, f)));
+    fielderSel.value = w.fielder || "";
+    return sheet(`At-Bat ${(sh.index ?? g.plays.length) + 1}`, [
+      ballInPlay ? [
+        h("div", { class: "k" }, "Where the ball went"),
+        tapField({ marker: w.location, onTap: fp => {
+          if (!w.fielder || (w.location && w.fielder === E.suggestedFielder(w.location))) w.fielder = E.suggestedFielder(fp);
+          w.location = fp; render();
+        } }),
+        h("div", { class: "muted small" }, w.location ? "Tap anywhere to move it." : "Tap the field for the spray chart (optional)."),
+      ] : null,
+      AB_GROUPS.map(([label, choices]) => [
+        h("div", { class: "k" }, label),
+        h("div", { class: "btn-grid three" }, choices.map(([text, result, outType]) =>
+          h("button", { type: "button", class: `chip${w.result === result && (w.outType || null) === (outType || null) ? " on base" : ""}`, onclick: () => pick(result, outType) }, text))),
+      ]),
+      outDetail ? h("label", { class: "inline-field" }, "Fielder", fielderSel) : null,
+      h("div", { class: "ab-foot" },
+        h("label", { class: `toggle${canScore ? "" : " off"}` }, h("input", { type: "checkbox", disabled: !canScore || null, checked: (canScore && w.scored) || null,
+          onchange: e => { w.scored = e.target.checked; } }), " Scored"),
+        h("div", { class: "stepper" },
+          h("button", { type: "button", class: "chip", "aria-label": "Fewer RBI", onclick: () => { w.rbi = Math.max(0, w.rbi - 1); render(); } }, "−"),
+          h("b", null, `RBI ${w.rbi}`),
+          h("button", { type: "button", class: "chip", "aria-label": "More RBI", onclick: () => { w.rbi = Math.min(4, w.rbi + 1); render(); } }, "+"))),
+      h("button", { type: "button", class: "btn", disabled: !w.result || null, onclick: save }, "Save At-Bat"),
+      sh.index != null ? h("button", { type: "button", class: "btn small danger", onclick: async () => {
+        if (!confirm("Delete this at-bat?")) return;
+        if (await change(rec, x => { x.plays.splice(sh.index, 1); })) { ui.sheet = null; render(); }
+      } }, "Delete This At-Bat") : null,
+    ]);
+  }
+
+  function soloGameView(id) {
+    const rec = recs.get(id);
+    if (!rec || rec.kind !== "solo") {
+      pullSolo();
+      return [h("a", { class: "back", href: "#/me" }, "‹ My Stats"), h("div", { class: "card empty" }, soloPulled ? "That game isn't on this phone." : "Loading…")];
+    }
+    const g = rec.game, player = g.lineup[0] || { name: "Player" };
+    const sync = syncText(rec);
+    const dots = (E.publishedGame(g).spray || []);
+    const sh = ui.sheet;
+    const sheetView = sh?.type === "atbat" && sh.rec === id ? atBatSheet(rec, sh)
+      : sh?.type === "solodetails" && sh.rec === id ? sheet("Game Details", soloDetailsForm(sh.work, {
+          submitText: "Save",
+          onCancel: () => { ui.sheet = null; render(); },
+          onSubmit: async () => {
+            const d = sh.work;
+            await change(rec, x => {
+              x.lineup[0] = { ...x.lineup[0], ...soloPlayer(d.name.trim()), id: x.lineup[0].id };
+              Object.assign(x, { team: d.team.trim(), opponent: d.opponent.trim(), date: d.date, isHome: d.isHome,
+                event: d.eventKind && d.eventName.trim() ? { kind: d.eventKind, name: d.eventName.trim() } : null });
+            });
+            ui.sheet = null; render();
+          },
+        })) : null;
+    return [
+      h("a", { class: "back", href: "#/me" }, "‹ My Stats"),
+      h("div", { class: "solo-head" },
+        h("h1", null, player.name),
+        h("div", { class: "muted" }, `${g.team ? g.team + " · " : ""}${fmtDate(g.date)} · ${gameTitle(g)}${g.isFinal ? " · Final" : ""}`),
+        h("div", { class: "solo-line" }, soloLine(g)),
+        h("div", { class: `sync ${sync.cls}` }, sync.text)),
+      !g.isFinal ? h("button", { type: "button", class: "btn big", onclick: () => { ui.sheet = { type: "atbat", rec: id, index: null }; render(); } }, "+ Add At-Bat") : null,
+      g.plays.length ? h("div", { class: "card pbp" }, g.plays.map((p, i) => h("button", { type: "button", class: "play play-btn", onclick: () => { ui.sheet = { type: "atbat", rec: id, index: i }; render(); } },
+        h("div", null, `${i + 1}. ${E.detailTitle(p)}`),
+        (() => { const x = [p.rbi ? `${p.rbi} RBI` : null, p.batterTo === HOME && p.result !== "homeRun" ? "scored" : null].filter(Boolean).join(" · "); return x ? h("div", { class: "r" }, x) : null; })())))
+        : h("div", { class: "muted small" }, "No at-bats yet. Tap Add At-Bat after each trip to the plate."),
+      h("h2", { class: "section" }, "Spray Chart"),
+      ctx.sprayCard(player.name, `${fmtDate(g.date)} · ${gameTitle(g)}`, dots),
+      h("div", { class: "form-actions start" },
+        h("button", { type: "button", class: "btn small ghost", onclick: () => change(rec, x => { x.isFinal = !x.isFinal; }).then(render) }, g.isFinal ? "Reopen Game" : "Finish Game"),
+        h("button", { type: "button", class: "btn small ghost", onclick: () => {
+          ui.sheet = { type: "solodetails", rec: id, work: { name: player.name, team: g.team || "", opponent: g.opponent || "", isHome: !!g.isHome, date: g.date,
+            eventKind: g.event?.kind || "", eventName: g.event?.name || "" } };
+          render();
+        } }, "Game Details"),
+        h("button", { type: "button", class: "btn small danger", onclick: async () => { if (await deleteSolo(rec)) location.hash = "#/me"; } }, "Delete")),
+      h("div", { class: "legend" }, `Only ${player.name}'s at-bats are kept for this game. They count toward ${player.name}'s stats on My Stats when that's you, but not the team's record. Only you can see it.`),
+      sheetView,
+    ];
+  }
+
+  // One-player games from the app's export file.
+  const soloImp = { games: null, done: null, error: null };
+  async function readSoloExport(file) {
+    soloImp.error = null; soloImp.done = null; soloImp.games = null;
+    try {
+      const data = JSON.parse(await file.text());
+      if (data?.format !== "statbook-export" || !Array.isArray(data.games)) throw new Error("That isn't a file from the app's Export Games for the Website.");
+      soloImp.games = data.games.filter(g => g && g.isSolo && typeof g.id === "string" && Array.isArray(g.plays) && g.lineup?.length && !recs.has(g.id));
+    } catch (e) { soloImp.error = e.message || "Couldn't read that file."; }
+    render();
+  }
+  async function runSoloImport() {
+    let n = 0;
+    for (const g of soloImp.games) {
+      const game = structuredClone(g);
+      game.lineup = [{ ...soloPlayer(game.lineup[0].name), id: game.lineup[0].id }];
+      const rec = { id: game.id, kind: "solo", owner: me(), teamId: null, game, rev: 0, syncedRev: 0, pending: [], updateTime: null,
+        conflict: null, error: null, createdAt: Date.now(), savedAt: Date.now(), imported: true };
+      recs.set(rec.id, rec);
+      if (await change(rec, () => true)) n++; else recs.delete(rec.id);
+    }
+    soloImp.games = null; soloImp.done = n;
+    render();
+  }
+  function soloImportPanel() {
+    const picker = h("input", { type: "file", accept: ".json,application/json", class: "file-input", "aria-label": "Choose the exported file",
+      onchange: e => { const f = e.target.files?.[0]; if (f) readSoloExport(f); } });
+    return h("details", { class: "fold import", open: soloImp.games || soloImp.error || soloImp.done != null ? true : null },
+      h("summary", null, "Import one-player games from the app"),
+      h("p", { class: "muted small" }, "In the Stat Book app: Settings → Export Games for the Website, then pick the file here."),
+      h("label", { class: "btn small ghost file-btn" }, "Choose File…", picker),
+      soloImp.error ? h("div", { class: "notice" }, soloImp.error) : null,
+      soloImp.done != null ? h("div", { class: "muted" }, `${soloImp.done} game${soloImp.done === 1 ? "" : "s"} imported.`) : null,
+      soloImp.games ? (soloImp.games.length
+        ? h("div", { class: "form-actions start" }, h("button", { class: "btn small", type: "button", onclick: runSoloImport },
+          `Import ${soloImp.games.length} One-Player Game${soloImp.games.length === 1 ? "" : "s"}`))
+        : h("p", null, "No new one-player games in that file.")) : null);
+  }
+
+  /// Your own one-player games, shaped like published games (for My Stats).
+  const mySoloGames = () => soloRecs().filter(r => r.game.lineup[0]?.member === me()).map(r => ({ ...E.publishedGame(r.game), isSolo: true }));
+
   // ---------- Startup ----------
 
   const ready = loadRecs().then(() => { syncAll(); });
 
   return {
-    ready, isScorerHere, isManagerHere, recsForTeam: teamRecs, scheduleLineupEditor, startFromSchedule,
+    ready, confirmDeleteGame, scoredGame, soloSection, soloGameView, mySoloGames, isScorerHere, isManagerHere, recsForTeam: teamRecs, scheduleLineupEditor, startFromSchedule,
     view(r) {
       if (!r.id) return listView();
       if (r.id === "new") return newGameView();

@@ -43,6 +43,10 @@
     editingLineup: null,  // schedule game whose batting order a manager is setting
     linking: null,        // member a manager is linking to scorebook names (Team tab)
     links: [],            // scorebook name → member links (teams/{t}/links)
+    names: [],            // scorebook name → name renames and merges (teams/{t}/names)
+    otherTeams: null,     // Team tab: your other teams' players to add ("loading", or [{ id, name, people }])
+    scored: {},           // game id → { stamp, game }: the full web-scored game for the drawn scorebook
+    renaming: null,       // scorebook name an admin is renaming (Team tab)
     statsSort: { col: "avg", dir: -1 },
     statsTeam: "",
     sprayPlayer: "",
@@ -206,12 +210,25 @@
   /// Links a manager made on the Team tab (scorebook name → member), then shows every linked player under the
   /// name on their account now, so stats follow the person whatever name they were scored under.
   const linkKey = name => encodeURIComponent(String(name || "").trim().toLowerCase()).replace(/\./g, "%2E");
-  function withMemberNames(games, members, links = []) {
-    const names = new Map(members.map(m => [m.uid, m.name]));
-    const linked = new Map(links.filter(l => names.has(l.uid)).map(l => [l.id, l.uid]));
+  /// A scorebook name after an admin's renames and merges ("Mike C" → "Mike Carter"), following chains.
+  function renamed(name, renames) {
+    let n = String(name || "").trim();
+    for (let i = 0; i < 6; i++) {
+      const to = renames.get(linkKey(n));
+      if (!to || to.trim().toLowerCase() === n.toLowerCase()) break;
+      n = to.trim();
+    }
+    return n;
+  }
+  function withMemberNames(games, members, links = [], names = []) {
+    const memberNames = new Map(members.map(m => [m.uid, m.name]));
+    const linked = new Map(links.filter(l => memberNames.has(l.uid)).map(l => [l.id, l.uid]));
+    const renames = new Map(names.map(r => [r.id, r.to]));
     const named = x => {
-      const member = x.member || linked.get(linkKey(x.name));
-      return member ? { ...x, member, name: names.get(member) || x.name, scoredAs: x.name } : x;
+      const name = x.member ? x.name : renamed(x.name, renames);
+      const member = x.member || linked.get(linkKey(name)) || linked.get(linkKey(x.name));
+      if (member) return { ...x, member, name: memberNames.get(member) || name, scoredAs: x.name };
+      return name !== x.name ? { ...x, name, scoredAs: x.name } : x;
     };
     return games.map(g => ({ ...g, lines: (g.lines || []).map(named), spray: (g.spray || []).map(named) }));
   }
@@ -486,7 +503,7 @@
 
   /// Loads the open team: its record, members, schedule and published games. False if you're not on it.
   async function load(teamId) {
-    let team, games, schedule, members, links = [], settings = null;
+    let team, games, schedule, members, links = [], names = [], settings = null;
     if (DEMO) {
       const d = await loadDemo();
       team = { name: d.board.name, members: d.members.map(m => m.uid), managers: ["demo-me"], leads: ["demo-alex"],
@@ -495,27 +512,29 @@
       schedule = state.schedule.length ? state.schedule : d.schedule.map(x => ({ ...x }));
       members = d.members;
       links = state.links || [];
+      names = state.names || [];
       settings = { scorerCode: "DEMOCODE2026", inviteCode: "DEMOINVITE26" };
     } else {
       try { team = await getDoc(`teams/${teamId}`); } catch (e) { if (e instanceof Forbidden) return false; throw e; }
       if (!team) return false;
-      [games, schedule, members, links] = await Promise.all([
+      [games, schedule, members, links, names] = await Promise.all([
         listDocs(`teams/${teamId}/games`).then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean)),
         listDocs(`teams/${teamId}/schedule`),
         listDocs(`teams/${teamId}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))),
         listDocs(`teams/${teamId}/links`).catch(() => []),
+        listDocs(`teams/${teamId}/names`).catch(() => []),
       ]);
       if ((team.managers || []).includes(me())) settings = await getDoc(`teams/${teamId}/private/settings`).catch(() => null);
       // Keep "My teams" in step with the team's current name.
       if (state.profile.teams[teamId] !== team.name) addToMyTeams(teamId, team.name).catch(() => {});
     }
     state.rawGames = games;
-    games = withMemberNames(games, members, links);
+    games = withMemberNames(games, members, links, names);
     games.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     schedule.sort((a, b) => `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`));
-    const signature = JSON.stringify([team, games, schedule, members, links, settings]);
+    const signature = JSON.stringify([team, games, schedule, members, links, names, settings]);
     const changed = signature !== state.signature;
-    Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, links, settings, signature, updated: new Date() });
+    Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, links, names, settings, signature, updated: new Date() });
     return changed ? "changed" : "same";
   }
 
@@ -529,6 +548,19 @@
       state.books[id] = "none";
     }
     if (route().name === "game" && route().id === id) render();
+  }
+
+  /// Games scored on the website keep every play, so their scorebook is drawn here instead of read as an image.
+  /// Fetched again when the published game changes (a live game gets new plays).
+  async function loadScored(g) {
+    const stamp = `${(g.plays || []).length}${g.isFinal ? "F" : ""}`;
+    if (state.scored[g.id]?.stamp === stamp) return;
+    const had = state.scored[g.id]?.game;
+    state.scored[g.id] = { stamp, game: had || "loading" };
+    const game = (scorer && window.StatBook && await scorer.scoredGame(state.key, g.id).catch(() => null)) || null;
+    state.scored[g.id] = { stamp, game };
+    if (!game && g.isFinal) loadBook(g.id);
+    if (route().name === "game" && route().id === g.id) render();
   }
 
   // Schedule & availability
@@ -587,6 +619,19 @@
     }
   }
 
+  /// A new team made here: you're its only member and its admin, with an invite link ready to share.
+  async function createTeam(rawName) {
+    const name = rawName.trim().slice(0, 80);
+    if (!name) throw new Error("Give the team a name.");
+    const teamId = randomCode(22, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
+    await setDoc(`teams/${teamId}`, { name, members: [me()], managers: [me()], createdAt: now(), updatedAt: now() }, { exists: false });
+    await becomeMember(teamId, name);
+    const code = newCode();
+    await setDoc(`invites/${code}`, { teamId, teamName: name, createdAt: now() }, { exists: false });
+    await setDoc(`teams/${teamId}/private/settings`, { inviteCode: code });
+    return teamId;
+  }
+
   async function newInviteLink() {
     if (DEMO) throw new Error("That isn't available in the demo.");
     const code = newCode();
@@ -608,7 +653,7 @@
     for (const d of await listDocs(`teams/${t}/scoring`, [["mask.fieldPaths", "rev"]])) {
       for (const r of await listDocs(`teams/${t}/scoring/${d.id}/revs`, [["mask.fieldPaths", "rev"]])) await deleteDoc(`teams/${t}/scoring/${d.id}/revs/${r.id}`);
     }
-    for (const sub of ["scoring", "schedule", "games", "books", "members", "links"]) {
+    for (const sub of ["scoring", "schedule", "games", "books", "members", "links", "names"]) {
       for (const d of await listDocs(`teams/${t}/${sub}`, [["mask.fieldPaths", "updatedAt"]])) await deleteDoc(`teams/${t}/${sub}/${d.id}`);
     }
     if (state.settings?.inviteCode) await deleteDoc(`invites/${state.settings.inviteCode}`).catch(() => {});
@@ -623,6 +668,7 @@
   function route() {
     const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
     if (parts[0] === "game" && parts[1]) return { name: "game", id: decodeURIComponent(parts[1]) };
+    if (parts[0] === "solo" && parts[1]) return { name: "solo", id: decodeURIComponent(parts[1]) };
     if (parts[0] === "score") return { name: "score", id: parts[1] ? decodeURIComponent(parts[1]) : null };
     if (["games", "stats", "me", "spray", "team"].includes(parts[0])) return { name: parts[0] };
     return { name: "schedule" };
@@ -854,16 +900,21 @@
   function homeView() {
     const teams = Object.entries(state.profile.teams || {}).sort((a, b) => a[1].localeCompare(b[1]));
     const code = h("input", { type: "text", placeholder: "ABCD-EFGH-JKLM", required: true, "aria-label": "Scorer code", autocapitalize: "characters" });
+    const teamName = h("input", { type: "text", placeholder: "Team name", required: true, maxlength: "80", "aria-label": "Team name", autocapitalize: "words" });
     app.replaceChildren(panel(
       h("h1", null, state.profile.name ? `Hi, ${state.profile.name.split(" ")[0]}` : "Your teams"),
       flashMessage(),
       teams.length
         ? [h("p", null, "Your teams"), h("div", { class: "team-list" }, teams.map(([id, name]) =>
             h("div", { class: "team-item" }, h("a", { href: `${SITE}?t=${id}` }, name || "Team"))))]
-        : h("p", null, "You're not on a team yet. Ask your team's manager to send you the team's invite link, then open it to join."),
-      // Teams start in the Slow Pitch Book app; its scorer code brings a team here and makes you its manager.
-      h("details", { class: "fold" }, h("summary", null, "Scorers: add a team from the app"),
-        h("p", { class: "or" }, "Teams are created in the Slow Pitch Book app. There, tap Teams → your team → Website & Scoring → Set Up Team on Website, or enter the team's scorer code here. You'll become the team's manager."),
+        : h("p", null, "You're not on a team yet. Ask your team's admin to send you the team's invite link, then open it to join, or start your own team."),
+      h("details", { class: "fold", open: !teams.length || null }, h("summary", null, "Start a new team"),
+        h("p", { class: "or" }, "You'll be its admin: invite your teammates with its link, set the schedule and keep score here."),
+        h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await createTeam(teamName.value); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
+          teamName, h("button", { class: "btn", type: "submit" }, "Create Team"))),
+      // A team kept in the Slow Pitch Book app: its scorer code brings it here and makes you its admin.
+      h("details", { class: "fold" }, h("summary", null, "Have a team in the Stat Book app?"),
+        h("p", { class: "or" }, "In the app tap Teams → your team → Website & Scoring → Set Up Team on Website, or enter the team's scorer code here. You'll become the team's admin."),
         h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await claimWithScorerCode(code.value); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
           code, h("button", { class: "btn", type: "submit" }, "Add Team"))),
       h("p", { class: "or" }, `Signed in as ${session.email} · `,
@@ -1359,6 +1410,108 @@
     await deleteDoc(`teams/${state.key}/links/${id}`);
   }
 
+  // ---------- Adding people from your other teams (admins, like the app's Add From Another Team) ----------
+
+  /// Loads the other teams you're an admin of, with their players' names.
+  async function loadOtherTeams() {
+    const ids = Object.keys(state.profile?.teams || {}).filter(id => id !== state.key);
+    const teams = await Promise.all(ids.map(async id => {
+      try {
+        const t = await getDoc(`teams/${id}`);
+        if (!t || !(t.managers || []).includes(me())) return null;
+        const names = new Map((await listDocs(`teams/${id}/members`)).map(m => [m.id, m.name]));
+        return { id, name: t.name || "Team", people: (t.members || []).map(uid => ({ uid, name: names.get(uid) || "Player" })) };
+      } catch { return null; }
+    }));
+    return teams.filter(Boolean);
+  }
+
+  async function addFromTeam(fromId, person) {
+    if (DEMO) throw new Error("That isn't available in the demo.");
+    await changeLists(state.key, { add: { members: [person.uid] }, set: { addedFrom: fromId, updatedAt: now() } });
+    await setDoc(`teams/${state.key}/members/${person.uid}`, { name: person.name });
+  }
+
+  function otherTeamsSection() {
+    if (DEMO || Object.keys(state.profile?.teams || {}).filter(id => id !== state.key).length === 0) return null;
+    const here = new Set(state.team?.members || []);
+    const o = state.otherTeams;
+    const open = !!o;
+    return h("details", { class: "fold", open: open || null, ontoggle: e => {
+      if (e.target.open && !state.otherTeams) {
+        state.otherTeams = "loading";
+        loadOtherTeams().then(ts => { state.otherTeams = ts; }).catch(() => { state.otherTeams = []; }).finally(render);
+        render();
+      }
+    } },
+      h("summary", null, "Add players from your other teams"),
+      o === "loading" ? h("div", { class: "muted" }, "Loading your teams…")
+        : Array.isArray(o) ? (o.length ? o.map(t => {
+          const people = t.people.filter(p => !here.has(p.uid));
+          return [h("div", { class: "k" }, t.name),
+            people.length ? h("div", { class: "card roster" }, people.map(p => h("div", { class: "roster-row" },
+              h("div", { class: "rname" }, p.name),
+              h("div", { class: "radmin" }, h("button", { class: "btn small", type: "button",
+                onclick: action(() => addFromTeam(t.id, p), { after: refreshNow }) }, "Add")))))
+              : h("div", { class: "muted small" }, `Everyone on ${t.name} is already on ${state.team.name}.`)];
+        }) : h("div", { class: "muted small" }, "You aren't an admin of any other team.")) : null,
+      h("p", { class: "muted small" }, "They're added straight to this team as players, with the name they use on the other team. No invite needed."));
+  }
+
+  // ---------- Renaming and merging scorebook names (like the app's Player Names) ----------
+
+  function saveRename(from, to) {
+    const t = to.trim(), f = from.trim();
+    if (!t || t.toLowerCase() === f.toLowerCase()) throw new Error("Type a different name.");
+    if (DEMO) { state.names = [...(state.names || []).filter(r => r.id !== linkKey(f)), { id: linkKey(f), from: f, to: t }]; return load(state.key); }
+    return setDoc(`teams/${state.key}/names/${linkKey(f)}`, { from: f, to: t, by: me(), at: now() });
+  }
+  function undoRename(id) {
+    if (DEMO) { state.names = (state.names || []).filter(r => r.id !== id); return load(state.key); }
+    return deleteDoc(`teams/${state.key}/names/${id}`);
+  }
+
+  function namesSection() {
+    const people = [...scorebookPeople().values()].filter(p => !p.member).sort((a, b) => a.name.localeCompare(b.name));
+    const renames = (state.names || []).slice().sort((a, b) => a.from.localeCompare(b.from));
+    if (!people.length && !renames.length) return null;
+    const editing = state.renaming && people.find(p => p.key === state.renaming);
+    const editor = p => {
+      let typed = p.name;
+      const others = people.filter(o => o.key !== p.key);
+      const together = o => [...o.gameIDs].some(id => p.gameIDs.has(id));
+      return h("div", { class: "card pad link-panel" },
+        h("b", null, `Rename ${p.name}`),
+        h("div", { class: "pin-search" },
+          h("input", { type: "text", value: p.name, maxlength: "80", "aria-label": "New name", oninput: e => { typed = e.target.value; } }),
+          h("button", { class: "btn small", type: "button", onclick: e => {
+            const into = others.find(o => o.name.toLowerCase() === typed.trim().toLowerCase());
+            if (into && together(into)) { alert(`${p.name} and ${into.name} played in the same game, so they can't be the same person.`); return; }
+            if (into && !confirm(`${into.name} already exists, so their stats will be combined. Merge ${p.name} into ${into.name}?`)) return;
+            action(async () => { await saveRename(p.name, typed); state.renaming = null; }, { after: refreshNow })(e);
+          } }, "Rename")),
+        others.length ? [h("div", { class: "k" }, "Same person as"),
+          others.map(o => h("button", { type: "button", class: "link-row", disabled: together(o) || null, onclick: e => {
+            if (confirm(`Merge ${p.name} into ${o.name}? Every game with ${p.name} counts as ${o.name}'s.`)) {
+              action(async () => { await saveRename(p.name, o.name); state.renaming = null; }, { after: refreshNow })(e);
+            }
+          } }, h("span", null, o.name), h("span", { class: "muted small" }, together(o) ? "played together" : `${o.games} G · ${o.pa} PA`)))] : null,
+        h("div", { class: "form-actions start" }, h("button", { class: "btn small ghost", type: "button", onclick: () => { state.renaming = null; render(); } }, "Cancel")));
+    };
+    return [
+      h("h2", { class: "section" }, "Scorebook names"),
+      h("div", { class: "card roster" }, people.map(p => h("div", { class: "roster-row" },
+        h("div", { class: "rname" }, p.name, h("span", { class: "you" }, `${p.games} G · ${p.pa} PA`)),
+        h("div", { class: "radmin" }, h("button", { class: "link-btn", type: "button", onclick: () => { state.renaming = p.key; render(); } }, "Rename"))))),
+      editing ? editor(editing) : null,
+      renames.length ? h("details", { class: "fold" }, h("summary", null, `Renamed (${renames.length})`),
+        h("div", { class: "card roster" }, renames.map(r => h("div", { class: "roster-row" },
+          h("div", { class: "rname" }, `${r.from} → ${r.to}`),
+          h("div", { class: "radmin" }, h("button", { class: "link-btn danger", type: "button", onclick: action(() => undoRename(r.id), { after: refreshNow }) }, "Undo")))))) : null,
+      h("div", { class: "legend" }, "Names in the scorebook that aren't teammates' accounts (fill-ins, and players before they joined). Rename fixes a typo in every game; picking “Same person as” merges two names. To give a teammate their stats, use Link above instead."),
+    ];
+  }
+
   function teamView() {
     const manager = isManager();
     const invite = state.settings?.inviteCode ? `${SITE}?join=${state.settings.inviteCode}` : "";
@@ -1388,7 +1541,9 @@
           } }, "Remove")) : null,
         manager ? linkStatus(m) : null))),
       manager && state.linking ? linkPanel(state.members.find(m => m.uid === state.linking)) : null,
+      manager ? otherTeamsSection() : null,
       manager ? h("div", { class: "legend" }, "Link each player to the name they've been scored under (in the app or here): their stats then follow their account, under the name they chose. Admins have full control: players, roles, invites, links and the team. Managers set the schedule, choose lineups and keep score. Scorekeepers keep score from the lineup a manager set (they can make subs and add late arrivals). Schedulers add, edit and delete games on the schedule. Players see the schedule and stats and answer for themselves.") : null,
+      manager ? namesSection() : null,
       manager && state.settings?.scorerCode ? [
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
@@ -1517,7 +1672,10 @@
   function gameView(id) {
     const g = state.games.find(x => x.id === id);
     if (!g) return [h("a", { class: "back", href: "#/games" }, "‹ All games"), h("div", { class: "card empty", style: "margin-top:12px" }, "That game isn't on the website anymore.")];
-    if (g.isFinal) loadBook(g.id);
+    loadScored(g);
+    const deleteBtn = isAdmin() && scorer ? h("button", { class: "btn small danger", type: "button", onclick: action(async () => {
+      if (await scorer.confirmDeleteGame(state.key, g.id, title(g))) { location.hash = "#/games"; await refreshNow(); }
+    }, { after: () => {} }) }, "Delete Game") : null;
 
     const lines = (g.lines || []).filter(l => l.pa > 0 || l.r > 0 || l.crr > 0).map(derive);
     const totals = g.totals ? { ...derive(g.totals), name: "Team", _total: true } : null;
@@ -1533,6 +1691,7 @@
     }
 
     const book = state.books[g.id];
+    const scored = state.scored[g.id]?.game;
     return [
       h("a", { class: "back", href: "#/games" }, "‹ All games"),
       h("div", { class: "board game-head" },
@@ -1562,13 +1721,17 @@
             plays.map(p => h("div", { class: "play" }, h("div", null, p.text), p.runners ? h("div", { class: "r" }, p.runners) : null)),
           ]))
         : h("div", { class: "card empty" }, "No plays yet."),
-      g.isFinal ? [
+      scored && scored !== "loading" ? [
+        h("h2", { class: "section" }, "Scorebook"),
+        StatBook.panel(scored),
+      ] : g.isFinal ? [
         h("h2", { class: "section" }, "Scorebook"),
         h("div", { class: "card book pad" },
           book && book.startsWith("data:")
             ? h("img", { src: book, alt: `Scorebook for ${title(g)} on ${fmtDate(g.date)}` })
             : h("div", { class: "note" }, book === "none" ? "The scorebook image isn't available for this game." : "Loading the scorebook…")),
       ] : null,
+      deleteBtn ? h("div", { class: "form-actions start", style: "margin-top:28px" }, deleteBtn) : null,
     ];
   }
 
@@ -1675,7 +1838,8 @@
         .finally(() => { if (route().name === "me") render(); });
     }
     const loading = all && !Array.isArray(state.myAll);
-    const source = all ? (loading ? [] : state.myAll) : state.games;
+    const solo = scorer ? scorer.mySoloGames() : [];
+    const source = [...(all ? (loading ? [] : state.myAll) : state.games), ...solo];
     const pool = source.filter(g => myLine(g))
       .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
@@ -1699,17 +1863,18 @@
 
     const heading = h("h2", { class: "section" }, "My Stats",
       h("span", { class: "rec" }, [state.profile?.name, total ? `${total.g} game${total.g === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ")));
-    if (loading) return [heading, controls, h("div", { class: "card empty" }, "Loading your teams…")];
+    const tracked = scorer ? scorer.soloSection() : null;
+    if (loading) return [heading, controls, h("div", { class: "card empty" }, "Loading your teams…"), tracked];
     if (!pool.length) {
       return [heading, controls, h("div", { class: "card empty" },
         h("p", null, "No stats for you yet."),
         h("p", { class: "small" }, "Your scorer links your account to your games in the Slow Pitch Book app (Teams → your team → Players → Link). ",
-          `Games where you're listed as “${state.profile?.name || "your name"}” count too.`))];
+          `Games where you're listed as “${state.profile?.name || "your name"}” count too.`)), tracked];
     }
     if (!games.length) {
       return [heading, controls, h("div", { class: "card empty" },
         h("p", null, `No games for you in ${currentEventLabel() || "this season"}.`),
-        h("p", { class: "small" }, "Tap the season at the top right to see another one, or All seasons."))];
+        h("p", { class: "small" }, "Tap the season at the top right to see another one, or All seasons.")), tracked];
     }
 
     const rateTile = (label, value) => h("div", { class: "card my-rate" }, h("b", null, rate(value)), h("span", null, label));
@@ -1729,6 +1894,7 @@
       { key: "date", label: "Date", value: r => fmtDate(r.game.date) },
       { key: "name", label: "Game", value: r => {
         const text = [title(r.game), all ? r.game.team : ""].filter(Boolean).join(" · ");
+        if (r.game.isSolo) return h("a", { href: `#/solo/${encodeURIComponent(r.game.id)}` }, `${text} (tracked)`);
         return here.has(r.game.id) ? h("a", { href: `#/game/${encodeURIComponent(r.game.id)}` }, text) : text;
       } },
       ...["ab", "r", "h", "b2", "b3", "hr", "rbi", "bb", "k"].map(k => BATTING.find(c => c.key === k)),
@@ -1756,6 +1922,7 @@
       dots.length ? sprayCard(state.profile?.name || "You", label, dots)
         : h("div", { class: "card empty" }, "None of your balls in play have a location yet."),
       h("div", { class: "legend" }, "AVG = H/AB · OBP = (H+BB)/(AB+BB+SF) · SLG = total bases/AB · OPS = OBP + SLG."),
+      tracked,
     ];
   }
 
@@ -1771,8 +1938,9 @@
       return;
     }
     const views = { schedule: scheduleView, games: gamesView, stats: statsView, me: myStatsView, spray: sprayView, team: teamView };
-    const content = r.name === "game" ? gameView(r.id) : r.name === "score" ? (scorer ? scorer.view(r) : gamesView()) : views[r.name]();
-    app.replaceChildren(...shell(r.name === "game" || r.name === "score" ? "games" : r.name, content));
+    const content = r.name === "game" ? gameView(r.id) : r.name === "score" ? (scorer ? scorer.view(r) : gamesView())
+      : r.name === "solo" ? (scorer ? scorer.soloGameView(r.id) : myStatsView()) : views[r.name]();
+    app.replaceChildren(...shell(r.name === "game" || r.name === "score" ? "games" : r.name === "solo" ? "me" : r.name, content));
     document.querySelector(".tabs a.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
     window.scrollTo(0, y);
     document.title = `${state.team?.name || "Team"} · Team Stats`;
@@ -1811,7 +1979,7 @@
 
   const scorer = window.StatScorer && window.StatEngine ? window.StatScorer({
     h, E: window.StatEngine, fs, DOCS, enc, fieldsOf, me, state, render, route, action, refreshNow, isManager, isLead, listDocs, saveLineup,
-    Forbidden, fieldSVG, COLORS, ordinal, fmtDate, todayISO, DEMO, eventsOf, storage, statsTable, BATTING, derive, lineScore,
+    Forbidden, fieldSVG, sprayCard, COLORS, ordinal, fmtDate, todayISO, DEMO, eventsOf, storage, statsTable, BATTING, derive, lineScore,
   }) : null;
 
   /// No connection when the page opened: show the games saved on this phone so scoring can carry on.

@@ -553,7 +553,7 @@ details.fold.past summary { margin-bottom: 10px; }
 .sheet.dialog p { margin: 0 0 6px; color: var(--muted); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
 .sheet-head b { font: 800 17px/1.2 var(--round); }
-.sheet-body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px 16px calc(18px + env(safe-area-inset-bottom)); display: grid; gap: 12px; }
+.sheet-body { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 14px 16px calc(18px + env(safe-area-inset-bottom)); display: grid; gap: 12px; grid-auto-rows: max-content; }
 @media (min-width: 700px) { .sheet-backdrop { align-items: center; } .sheet { border-radius: 18px; } }
 .oc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .oc-head b { font: 800 18px/1.2 var(--round); }
@@ -616,3 +616,42 @@ details.fold.past summary { margin-bottom: 10px; }
 .brand .record.picker:active { background: rgba(255, 255, 255, 0.08); }
 .brand .record .caret { color: var(--optic); }
 .season-select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 16px; -webkit-appearance: none; appearance: none; }
+/* Import from the app */
+.fold.import { margin-top: 18px; display: grid; gap: 8px; }
+.file-btn { position: relative; overflow: hidden; justify-self: start; cursor: pointer; }
+.file-input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+/* Drawn scorebook and box score (book.js) */
+.paper-book { padding: 12px; display: grid; gap: 12px; }
+.paper-book .seg { margin-left: 0; justify-self: start; }
+.seg-btn.book-tab.on { background: var(--accent, #2a5bd7); }
+.paper-scroll { overflow-x: auto; border-radius: 10px; background: #fcfcf7; -webkit-overflow-scrolling: touch; }
+.paper-scroll svg { display: block; width: 100%; height: auto; }
+.paper-scroll.wide svg { min-width: 700px; }
+.paper-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* One-player games (Tracked Players) */
+.badge.solo { background: var(--accent); }
+.badge.solo.live { box-shadow: inset 0 0 0 3px var(--optic); }
+.solo-head h1 { margin: 6px 0 2px; font: 900 32px/1.1 var(--round); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.solo-head .solo-line { font: 700 18px/1.3 var(--round); margin: 6px 0; }
+.btn.big { width: 100%; padding: 16px; font-size: 19px; }
+.btn-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.inline-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-weight: 700; }
+.ab-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; font: 700 15px/1 var(--round); }
+.ab-foot .toggle { display: flex; align-items: center; gap: 6px; }
+.ab-foot .toggle.off { opacity: 0.4; }
+.stepper { display: flex; align-items: center; gap: 10px; }
+.stepper .chip { width: 40px; padding: 8px 0; font-size: 18px; }
+
+/* iPad and wide screens held sideways: the field on the left, everything to tap on the right (like the app on iPad). */
+@media (min-width: 900px) and (orientation: landscape) {
+  .scorer { max-width: 1180px; }
+  .scorer-body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); column-gap: 24px; row-gap: 10px; align-content: start; }
+  .scorer-body > * { grid-column: 2; }
+  .scorer-body > .tap-field { grid-column: 1; grid-row: 1 / span 12; align-self: start; max-height: calc(100dvh - 90px); position: sticky; top: 8px; }
+  .scorer-body > .tap-field.shrink { max-height: calc(100dvh - 90px); }
+  .scorer-body > .hint { grid-column: 1; grid-row: 13; }
+  .sheet { max-width: 760px; }
+  .sheet .tap-field { max-height: 40vh; }
+}
