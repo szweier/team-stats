@@ -495,7 +495,7 @@
       else state.schedule.push({ id: newCode(), ...game, availability: {} });
       return;
     }
-    const fields = ["date", "time", "opponent", "isHome", "location", "notes", "updatedAt"];
+    const fields = ["date", "time", "opponent", "isHome", "location", "notes", "lat", "lng", "updatedAt"];
     await setDoc(`teams/${state.key}/schedule/${id || newCode()}`, { ...game, updatedAt: now() }, { mask: fields });
   }
 
@@ -985,6 +985,163 @@
         who("No reply", noReply, "none")));
   }
 
+  // ---------- Map pins for scheduled games ----------
+  // Leaflet with OpenStreetMap / Esri tiles and OpenStreetMap search, loaded only when someone opens the map.
+
+  const LEAFLET = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/";
+  let leafletLoad = null;
+  function loadLeaflet() {
+    if (!leafletLoad) {
+      leafletLoad = new Promise((resolve, reject) => {
+        const css = h("link", { rel: "stylesheet", href: `${LEAFLET}leaflet.min.css`, crossorigin: "anonymous",
+          integrity: "sha512-h9FcoyWjHcOcmEVkxOfTLnmZFWIH0iZhZT1H2TbOq55xssQGEJHEaIm+PgoUaZbRvQTNTluNOEfb1ZRy6D3BOw==" });
+        const js = h("script", { src: `${LEAFLET}leaflet.min.js`, crossorigin: "anonymous",
+          integrity: "sha512-puJW3E/qXDqYp9IfhAI54BJEaWIfloJ7JWs7OeD5i6ruC9JZL1gERT1wjtwXFlh7CjE7ZJ+/vcRZRkIYIb6p4g==" });
+        js.onload = () => resolve(window.L);
+        js.onerror = () => { leafletLoad = null; reject(new Error("Couldn't load the map. Check your connection and try again.")); };
+        document.head.append(css, js);
+      });
+    }
+    return leafletLoad;
+  }
+
+  const NOMINATIM = "https://nominatim.openstreetmap.org/";
+  async function findPlaces(q) {
+    const r = await fetch(`${NOMINATIM}search?format=jsonv2&limit=6&q=${encodeURIComponent(q)}`);
+    if (!r.ok) throw new Error("Search isn't working right now. Tap the map to drop the pin instead.");
+    return (await r.json()).map(p => ({ name: p.name || p.display_name.split(",")[0], detail: p.display_name, lat: +p.lat, lng: +p.lon }));
+  }
+  /// What Maps calls a spot (the park it's in, if known), or "".
+  async function placeName(lat, lng) {
+    try {
+      const p = await (await fetch(`${NOMINATIM}reverse?format=jsonv2&zoom=17&lat=${lat}&lon=${lng}`)).json();
+      const a = p.address || {};
+      // A park or field, not the road the pin happens to sit on.
+      return a.leisure || a.park || (p.category === "highway" ? "" : p.name) || "";
+    } catch { return ""; }
+  }
+
+  /// Fields this team has pinned before (the newest pin for each name), A to Z.
+  function savedFields() {
+    const byName = new Map();
+    for (const g of [...state.schedule].sort((a, b) => (b.date || "").localeCompare(a.date || ""))) {
+      const name = (g.location || "").trim();
+      if (name && typeof g.lat === "number" && typeof g.lng === "number" && !byName.has(name.toLowerCase())) {
+        byName.set(name.toLowerCase(), { name, lat: g.lat, lng: g.lng });
+      }
+    }
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /// The pin part of the game form: pick a saved field, or drop / drag a pin on a map. `loc` is the
+  /// Field / park input, which doubles as the pin's name. get() returns { lat, lng } or null.
+  function pinField(loc, start) {
+    let pin = start;
+    let map = null, marker = null, autoName = "";
+    const fields = savedFields();
+    const status = h("span", { class: "pin-status" });
+    const dropBtn = h("button", { class: "btn small ghost", type: "button", onclick: () => openMap() });
+    const removeBtn = h("button", { class: "link-btn danger", type: "button", onclick: () => setPin(null) }, "Remove Pin");
+    const search = h("input", { type: "search", placeholder: "Search for a park or address", "aria-label": "Search for a park or address",
+      onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); runSearch(); } } });
+    const results = h("div", { class: "pin-results" });
+    const mapEl = h("div", { class: "pin-canvas" });
+    const note = h("p", { class: "pin-note" }, "Tap the map to drop the pin on the field, then drag it to fine-tune. Give the field a name in Location so you can pick it again next time.");
+    let street, satellite;
+    const styleBtn = (label, sat) => h("button", { class: "seg-btn", type: "button", "aria-pressed": String(sat),
+      onclick: e => {
+        if (!map) return;
+        map.removeLayer(sat ? street : satellite); (sat ? satellite : street).addTo(map);
+        for (const b of e.currentTarget.parentElement.children) b.setAttribute("aria-pressed", String(b === e.currentTarget));
+      } }, label);
+    const box = h("div", { class: "pin-map", hidden: true },
+      h("div", { class: "pin-search" }, search, h("button", { class: "btn small", type: "button", onclick: () => runSearch() }, "Search")),
+      results, mapEl,
+      h("div", { class: "pin-tools" },
+        h("div", { class: "seg", role: "group", "aria-label": "Map style" }, styleBtn("Satellite", true), styleBtn("Map", false)),
+        h("button", { class: "btn small", type: "button", onclick: () => { box.hidden = true; refresh(); } }, "Done")),
+      note);
+
+    function refresh() {
+      dropBtn.textContent = pin ? "Move Pin" : "Drop a Pin on the Map";
+      removeBtn.hidden = !pin;
+      status.textContent = pin ? `📍 Pinned at ${pin.lat.toFixed(5)}, ${pin.lng.toFixed(5)}` : "No pin yet";
+    }
+    function setPin(p, { center = false } = {}) {
+      pin = p ? { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) } : null;
+      if (map) {
+        if (!pin && marker) { marker.remove(); marker = null; }
+        if (pin && !marker) {
+          marker = window.L.marker([pin.lat, pin.lng], { draggable: true,
+            icon: window.L.divIcon({ className: "pin-icon", iconSize: [24, 24], iconAnchor: [12, 12] }) }).addTo(map);
+          marker.on("dragend", () => { const c = marker.getLatLng(); dropped({ lat: c.lat, lng: c.lng }); });
+        } else if (pin) marker.setLatLng([pin.lat, pin.lng]);
+        if (pin && center) map.setView([pin.lat, pin.lng], 17);
+      }
+      refresh();
+    }
+    /// A pin placed by hand: when the field has no name yet, name it after the park it's in.
+    async function dropped(p) {
+      setPin(p);
+      if (loc.value.trim()) return;
+      const name = await placeName(p.lat, p.lng);
+      if (name && pin && pin.lat === +p.lat.toFixed(6) && !loc.value.trim()) loc.value = name;
+    }
+    async function runSearch(q = search.value.trim(), jump = false) {
+      if (!q) return;
+      results.replaceChildren(h("div", { class: "pin-note" }, "Searching…"));
+      try {
+        const found = await findPlaces(q);
+        if (jump) {
+          results.replaceChildren();
+          if (found[0] && map && !pin) map.setView([found[0].lat, found[0].lng], 16);
+          return;
+        }
+        results.replaceChildren(...(found.length ? found.map(f => h("button", { class: "pin-result", type: "button", onclick: () => {
+          if (!loc.value.trim() || loc.value === autoName) { loc.value = f.name; autoName = f.name; }   // a newer search renames it
+          setPin(f, { center: true });
+          results.replaceChildren();
+          search.value = "";
+        } }, h("b", null, f.name), h("span", null, f.detail))) : [h("div", { class: "pin-note" }, "No places found. Try another search, or tap the map.")]));
+      } catch (e) {
+        results.replaceChildren(h("div", { class: "pin-note" }, e.message));
+      }
+    }
+    async function openMap() {
+      box.hidden = false;
+      if (map) { map.invalidateSize(); return; }
+      let L;
+      try { L = await loadLeaflet(); } catch (e) { note.textContent = e.message; return; }
+      street = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' });
+      satellite = L.layerGroup([
+        L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Imagery &copy; Esri" }),
+        // Place names on the photos, until you're close enough to see the fields themselves.
+        L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}", { maxZoom: 15 }),
+      ]);
+      map = L.map(mapEl, { layers: [satellite] }).setView([39.5, -98.35], 4);
+      map.on("click", e => dropped({ lat: e.latlng.lat, lng: e.latlng.lng }));
+      if (pin) setPin(pin, { center: true });
+      else if (loc.value.trim()) runSearch(loc.value.trim(), true);
+      else if (fields[0]) map.setView([fields[0].lat, fields[0].lng], 14);
+      setTimeout(() => map.invalidateSize(), 50);
+    }
+
+    refresh();
+    const el = h("div", { class: "pin-field" },
+      fields.length ? h("select", { class: "control", "aria-label": "Choose a saved field",
+        onchange: e => {
+          const f = fields[+e.target.value];
+          e.target.value = "";
+          if (!f) return;
+          loc.value = f.name; autoName = "";
+          setPin(f, { center: true });
+        } }, h("option", { value: "" }, "Choose a saved field…"), fields.map((f, i) => h("option", { value: String(i) }, f.name))) : null,
+      h("div", { class: "pin-row" }, status, dropBtn, removeBtn),
+      box);
+    return { el, get: () => pin };
+  }
+
   function gameForm(g) {
     const f = g || { date: todayISO(), time: "", opponent: "", isHome: false, location: "", notes: "" };
     const date = h("input", { type: "date", required: true, value: f.date, "aria-label": "Date" });
@@ -994,6 +1151,7 @@
       h("option", { value: "away" }, "Away"), h("option", { value: "home" }, "Home"));
     side.value = f.isHome ? "home" : "away";
     const loc = h("input", { type: "text", placeholder: "Field / park", maxlength: "200", value: f.location || "", "aria-label": "Location" });
+    const where = pinField(loc, typeof f.lat === "number" && typeof f.lng === "number" ? { lat: f.lat, lng: f.lng } : null);
     const notes = h("textarea", { placeholder: "Notes (arrival time, jersey color…)", maxlength: "500", rows: "2", "aria-label": "Notes" }, f.notes || "");
     return h("form", {
       class: "card game-form",
@@ -1001,7 +1159,8 @@
         e.preventDefault();
         action(async () => {
           await saveGame(g?.id, { date: date.value, time: time.value, opponent: opponent.value.trim(), isHome: side.value === "home",
-                                  location: loc.value.trim(), notes: notes.value.trim() });
+                                  location: loc.value.trim(), notes: notes.value.trim(),
+                                  lat: where.get()?.lat ?? null, lng: where.get()?.lng ?? null });
           state.editing = null;
         }, { after: refreshNow })(e);
       },
@@ -1010,6 +1169,7 @@
       h("div", { class: "row2" }, h("label", null, "Date", date), h("label", null, "Time", time)),
       h("div", { class: "row2" }, h("label", null, "Opponent", opponent), h("label", null, "Home or away", side)),
       h("label", null, "Location", loc),
+      where.el,
       h("label", null, "Notes", notes),
       h("div", { class: "form-actions" },
         h("button", { class: "btn ghost", type: "button", onclick: () => { state.editing = null; render(); } }, "Cancel"),
