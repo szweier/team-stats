@@ -2359,6 +2359,8 @@ window.STATBOOK_DEMO = {
    "opponent": "Hawks",
    "isHome": true,
    "location": "Riverside Park Field 2",
+   "lat": 37.7694,
+   "lng": -122.4862,
    "notes": "Black jerseys. Arrive 20 min early.",
    "availability": {
     "demo-alex": {

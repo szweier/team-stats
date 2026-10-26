@@ -337,7 +337,14 @@ h2.section .btn { margin-left: auto; letter-spacing: 0; text-transform: none; }
 .sched-info { flex: 1; min-width: 0; }
 .sched-info .opp { font: 800 18px/1.25 var(--round); }
 .sched-info .meta { color: var(--muted); font-size: 14px; margin-top: 2px; }
-.sched-info .loc { display: inline-block; margin-top: 4px; font-size: 14px; }
+.sched-info .loc { margin-top: 6px; font-size: 14px; }
+.sched-info .loc-name { display: block; }
+.sched-info .loc-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.sched-info .map-link {
+  font: 700 12px/1 var(--round); padding: 6px 10px; border-radius: 999px; text-decoration: none;
+  background: var(--card-2); border: 1px solid var(--line); color: inherit;
+}
+.sched-info .map-link:hover { border-color: var(--accent, currentColor); }
 .sched-info .notes { margin-top: 6px; font-size: 14px; white-space: pre-wrap; }
 .sched-admin { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
 .answer { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }

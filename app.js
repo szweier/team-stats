@@ -895,7 +895,16 @@
     const [hh, mm] = t.split(":").map(Number);
     return new Date(2000, 0, 1, hh, mm).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   }
-  const mapsLink = place => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place)}`;
+  /// Directions to a game: the exact pin when the app dropped one, otherwise a search for the field / park.
+  function mapLinks(g) {
+    const pin = typeof g.lat === "number" && typeof g.lng === "number" ? `${g.lat},${g.lng}` : null;
+    const place = encodeURIComponent(g.location || "");
+    return [
+      ["Apple Maps", pin ? `https://maps.apple.com/?ll=${pin}&q=${place || "Game"}` : `https://maps.apple.com/?q=${place}`],
+      ["Google Maps", `https://www.google.com/maps/search/?api=1&query=${pin || place}`],
+      ["Waze", pin ? `https://waze.com/ul?ll=${pin}&navigate=yes` : `https://waze.com/ul?q=${place}&navigate=yes`],
+    ];
+  }
   const ANSWERS = [["in", "In"], ["maybe", "Maybe"], ["out", "Out"]];
 
   function scheduleView() {
@@ -942,7 +951,10 @@
         h("div", { class: "sched-info" },
           h("div", { class: "opp" }, opp),
           h("div", { class: "meta" }, [g.time ? fmtTime(g.time) : "Time TBD", g.isHome ? "Home" : "Away"].join(" · ")),
-          g.location ? h("a", { class: "loc", href: mapsLink(g.location), target: "_blank", rel: "noopener" }, "📍 ", g.location) : null,
+          g.location || typeof g.lat === "number" ? h("div", { class: "loc" },
+            h("span", { class: "loc-name" }, "📍 ", g.location || "Pinned on the map"),
+            h("span", { class: "loc-links" }, mapLinks(g).map(([label, href]) =>
+              h("a", { class: "map-link", href, target: "_blank", rel: "noopener" }, label)))) : null,
           g.notes ? h("div", { class: "notes" }, g.notes) : null),
         manager ? h("div", { class: "sched-admin" },
           h("button", { class: "link-btn", type: "button", onclick: () => { state.editing = g.id; render(); } }, "Edit"),
