@@ -364,6 +364,8 @@
 
   const me = () => (DEMO ? "demo-me" : session?.uid);
   const isManager = () => DEMO || (state.team?.managers || []).includes(me());
+  /// Managers, plus members a manager has let add and edit the schedule.
+  const canSchedule = () => isManager() || (state.team?.schedulers || []).includes(me());
 
   async function loadProfile() {
     if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
@@ -517,15 +519,16 @@
 
   // Team management (managers)
 
-  async function setRoles(members, managers) {
+  async function setRoles(members, managers, schedulers = state.team.schedulers || []) {
     if (DEMO) throw new Error("That isn't available in the demo.");
-    await setDoc(`teams/${state.key}`, { name: state.team.name, members, managers, updatedAt: now() },
-      { mask: ["name", "members", "managers", "updatedAt"], exists: true });
+    await setDoc(`teams/${state.key}`, { name: state.team.name, members, managers, schedulers, updatedAt: now() },
+      { mask: ["name", "members", "managers", "schedulers", "updatedAt"], exists: true });
   }
 
   async function removeMember(uid) {
     if (DEMO) throw new Error("That isn't available in the demo.");
-    await setRoles((state.team.members || []).filter(x => x !== uid), (state.team.managers || []).filter(x => x !== uid));
+    await setRoles((state.team.members || []).filter(x => x !== uid), (state.team.managers || []).filter(x => x !== uid),
+      (state.team.schedulers || []).filter(x => x !== uid));
     await deleteDoc(`teams/${state.key}/members/${uid}`).catch(() => {});
   }
 
@@ -547,7 +550,7 @@
 
   async function leaveTeam() {
     await deleteDoc(`teams/${state.key}/members/${me()}`).catch(() => {});
-    await changeLists(state.key, { remove: { members: [me()], managers: [me()] } });
+    await changeLists(state.key, { remove: { members: [me()], managers: [me()], schedulers: [me()] } });
     await dropFromMyTeams(state.key);
   }
 
@@ -915,7 +918,7 @@
     const today = todayISO();
     const upcoming = state.schedule.filter(g => g.date >= today);
     const past = state.schedule.filter(g => g.date < today).reverse();
-    const manager = isManager();
+    const manager = canSchedule();
     return [
       h("h2", { class: "section" }, "Upcoming",
         manager && state.editing !== "new"
@@ -1016,6 +1019,7 @@
   function teamView() {
     const manager = isManager();
     const managers = new Set(state.team?.managers || []);
+    const schedulers = new Set(state.team?.schedulers || []);
     const invite = state.settings?.inviteCode ? `${SITE}?join=${state.settings.inviteCode}` : "";
     const sorted = [...state.members].sort((a, b) => Number(managers.has(b.uid)) - Number(managers.has(a.uid)) || (a.name || "").localeCompare(b.name || ""));
     return [
@@ -1032,15 +1036,20 @@
       h("h2", { class: "section" }, `Players (${state.members.length})`),
       h("div", { class: "card roster" }, sorted.map(m => h("div", { class: "roster-row" },
         h("div", { class: "rname" }, m.name || "Player",
-          managers.has(m.uid) ? h("span", { class: "pill mgr" }, "Manager") : null,
+          managers.has(m.uid) ? h("span", { class: "pill mgr" }, "Manager")
+            : schedulers.has(m.uid) ? h("span", { class: "pill sched" }, "Scheduler") : null,
           m.uid === me() ? h("span", { class: "you" }, "You") : null),
         manager && m.uid !== me() ? h("div", { class: "radmin" },
           h("button", { class: "link-btn", type: "button", onclick: action(() => setRoles(state.team.members,
             managers.has(m.uid) ? [...managers].filter(x => x !== m.uid) : [...managers, m.uid]), { after: refreshNow }) },
             managers.has(m.uid) ? "Remove manager" : "Make manager"),
+          managers.has(m.uid) ? null : h("button", { class: "link-btn", type: "button", onclick: action(() => setRoles(state.team.members, [...managers],
+            schedulers.has(m.uid) ? [...schedulers].filter(x => x !== m.uid) : [...schedulers, m.uid]), { after: refreshNow }) },
+            schedulers.has(m.uid) ? "Stop scheduling" : "Let schedule"),
           h("button", { class: "link-btn danger", type: "button", onclick: e => {
             if (confirm(`Remove ${m.name || "this player"} from ${state.team.name}?`)) action(() => removeMember(m.uid), { after: refreshNow })(e);
           } }, "Remove")) : null))),
+      manager ? h("div", { class: "legend" }, "Managers run the team. Schedulers can add, edit and delete games on the schedule, and nothing else.") : null,
       manager && state.settings?.scorerCode ? [
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
