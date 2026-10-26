@@ -206,6 +206,34 @@
     return [...by.values()].map(derive);
   }
 
+  /// Each pitcher's totals over `games`, matched like batting lines (by account, else by name).
+  function seasonPitching(games) {
+    const by = new Map();
+    for (const g of games) {
+      if (!g.isFinal) continue;
+      for (const l of g.pitching || []) {
+        const name = String(l.name || "").trim();
+        const key = l.member ? `m:${l.member}` : `n:${name.toLowerCase()}`;
+        const s = by.get(key) || { name, member: l.member, g: 0, gs: 0, w: 0, l: 0, outs: 0, r: 0 };
+        s.g += 1; s.gs += l.gs || 0; s.w += l.w || 0; s.l += l.l || 0; s.outs += l.outs || 0; s.r += l.r || 0;
+        by.set(key, s);
+      }
+    }
+    return [...by.values()].map(pitchDerive);
+  }
+  const inningsText = outs => `${Math.floor(outs / 3)}${outs % 3 ? "." + (outs % 3) : ""}`;   // 13 outs → "4.1"
+  const pitchDerive = s => ({ ...s, ip: inningsText(s.outs), era: s.outs ? (s.r * 21) / s.outs : null });
+  const PITCHING = [
+    { key: "name", label: "Pitcher" },
+    { key: "g", label: "G", title: "Games pitched" },
+    { key: "gs", label: "GS", title: "Games started" },
+    { key: "w", label: "W" }, { key: "l", label: "L" },
+    { key: "ip", label: "IP", title: "Innings pitched" },
+    { key: "r", label: "R", title: "Runs allowed" },
+    { key: "era", label: "ERA", title: "Runs allowed per 7 innings", value: r => (r.era == null ? "–" : r.era.toFixed(2)) },
+  ];
+  const PITCH_NOTE = "IP = innings pitched (4.1 = four innings and one out). ERA = runs allowed per 7 innings; every run counts, since errors aren't tracked. The win or loss goes to whoever pitched the most that game.";
+
   /// Linked players show the name on their account now, so a rename never needs the app.
   /// Links a manager made on the Team tab (scorebook name → member), then shows every linked player under the
   /// name on their account now, so stats follow the person whatever name they were scored under.
@@ -237,7 +265,8 @@
   }
   function withMemberNames(games, members, links = [], names = []) {
     const named = nameMapper(members, links, names);
-    return games.map(g => ({ ...g, lines: (g.lines || []).map(named), spray: (g.spray || []).map(named) }));
+    return games.map(g => ({ ...g, lines: (g.lines || []).map(named), spray: (g.spray || []).map(named),
+      ...(g.pitching ? { pitching: g.pitching.map(named) } : {}) }));
   }
   /// A full scored game with everyone under the names the site shows (for the drawn scorebook).
   function withBookNames(g) {
@@ -1628,7 +1657,8 @@
             h("span", null, `${l.outs || 0} out${l.outs === 1 ? "" : "s"}`,
               h("span", { class: "outs", "aria-hidden": "true" },
                 [0, 1, 2].map(i => h("i", { class: i < (l.outs || 0) ? "on" : null }))))),
-          l.batter ? h("div", { class: "atbat" }, "At bat: ", h("b", null, l.batter)) : null),
+          l.batter ? h("div", { class: "atbat" }, "At bat: ", h("b", null, l.batter)) : null,
+          l.pitcher ? h("div", { class: "atbat" }, "Pitching: ", h("b", null, l.pitcher)) : null),
         h("div", { class: "diamond" },
           h("div", { svg: diamondSVG(l) }),
           h("div", { class: "runners" },
@@ -1740,6 +1770,11 @@
       lineScore(g),
       h("h2", { class: "section" }, "Batting"),
       lines.length ? statsTable(BATTING, totals ? [...lines, totals] : lines) : h("div", { class: "card empty" }, "No at-bats yet."),
+      (g.pitching || []).length ? [
+        h("h2", { class: "section" }, "Pitching"),
+        statsTable([PITCHING[0], ...PITCHING.slice(5)], g.pitching.map(l => pitchDerive({ ...l,
+          name: l.name + (l.w ? " (W)" : l.l ? " (L)" : "") }))),
+      ] : null,
       h("h2", { class: "section" }, "Spray Chart"),
       players.length ? h("div", { class: "controls" },
         h("select", {
@@ -1801,7 +1836,17 @@
           })
         : h("div", { class: "card empty" }, "No stats yet."),
       h("div", { class: "legend" }, "Tap a column to sort. Players are matched by account when the scorer has linked them, otherwise by name. AVG = H/AB · OBP = (H+BB)/(AB+BB+SF) · SLG = total bases/AB."),
+      ...pitchingSection(games),
     ];
+  }
+
+  function pitchingSection(games) {
+    const rows = seasonPitching(games).sort((a, b) => b.outs - a.outs || a.name.localeCompare(b.name));
+    if (!rows.length) return [];
+    const total = pitchDerive({ name: "Team", g: "", gs: "", w: rows.reduce((s, r) => s + r.w, 0), l: rows.reduce((s, r) => s + r.l, 0),
+      outs: rows.reduce((s, r) => s + r.outs, 0), r: rows.reduce((s, r) => s + r.r, 0) });
+    total._total = true;
+    return [h("h2", { class: "section" }, "Pitching"), statsTable(PITCHING, rows.length > 1 ? [...rows, total] : rows), h("div", { class: "legend" }, PITCH_NOTE)];
   }
 
   function sprayView() {
@@ -1864,6 +1909,20 @@
   const sumLines = (name, lines) =>
     derive(Object.fromEntries([["name", name], ["g", lines.length], ...FIELDS.map(f => [f, lines.reduce((s, l) => s + l[f], 0)])]));
   const yearOf = g => String(g.date || "").slice(0, 4);
+
+  /// Your pitching in `games` (only shown if you've pitched).
+  function myPitching(games) {
+    const mine = games.map(g => ({ ...g, pitching: (g.pitching || []).filter(isMine) })).filter(g => g.pitching.length);
+    const rows = seasonPitching(mine);
+    if (!rows.length) return [];
+    const t = pitchDerive(rows.reduce((a, r) => ({ ...a, g: a.g + r.g, gs: a.gs + r.gs, w: a.w + r.w, l: a.l + r.l, outs: a.outs + r.outs, r: a.r + r.r }),
+      { name: "Pitching", g: 0, gs: 0, w: 0, l: 0, outs: 0, r: 0 }));
+    return [
+      h("h2", { class: "section" }, "My Pitching"),
+      h("div", { class: "card my-counts" }, [["G", t.g], ["GS", t.gs], ["W-L", `${t.w}-${t.l}`], ["IP", t.ip], ["R", t.r],
+        ["ERA", t.era == null ? "–" : t.era.toFixed(2)]].map(([k, v]) => h("div", null, h("b", null, v), h("span", null, k)))),
+    ];
+  }
 
   function myStatsView() {
     const teamCount = Object.keys(state.profile?.teams || {}).length;
@@ -1956,6 +2015,7 @@
       statsTable(columns, breakdown),
       h("h2", { class: "section" }, "Game Log"),
       statsTable(logColumns, logRows),
+      ...myPitching(games),
       h("h2", { class: "section" }, "My Spray Chart"),
       dots.length ? sprayCard(state.profile?.name || "You", label, dots)
         : h("div", { class: "card empty" }, "None of your balls in play have a location yet."),

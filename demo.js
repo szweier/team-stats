@@ -395,7 +395,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Blake",
-     "angle": 33.0,
+     "angle": 33,
      "distance": 0.77,
      "kind": "out"
     },
@@ -407,7 +407,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Drew",
-     "angle": 6.0,
+     "angle": 6,
      "distance": 0.713,
      "kind": "hit"
     },
@@ -456,7 +456,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Casey",
-     "angle": -17.0,
+     "angle": -17,
      "distance": 0.819,
      "kind": "hit"
     },
@@ -507,143 +507,144 @@ window.STATBOOK_DEMO = {
    "plays": [
     {
      "inning": 1,
-     "text": "Alex \u2013 Double"
+     "text": "Alex – Double"
     },
     {
      "inning": 1,
-     "text": "Blake \u2013 Single",
-     "runners": "Alex \u2192 3rd"
+     "text": "Blake – Single",
+     "runners": "Alex → 3rd"
     },
     {
      "inning": 1,
-     "text": "Casey \u2013 Single, 1 RBI",
-     "runners": "Alex scored, Blake \u2192 2nd"
+     "text": "Casey – Single, 1 RBI",
+     "runners": "Alex scored, Blake → 2nd"
     },
     {
      "inning": 1,
-     "text": "Drew \u2013 Home Run, 3 RBI",
+     "text": "Drew – Home Run, 3 RBI",
      "runners": "Blake scored, Casey scored"
     },
     {
      "inning": 1,
-     "text": "Emery \u2013 Triple"
+     "text": "Emery – Triple"
     },
     {
      "inning": 1,
-     "text": "Frankie \u2013 Single, 1 RBI",
+     "text": "Frankie – Single, 1 RBI",
      "runners": "Emery scored"
     },
     {
      "inning": 1,
-     "text": "Gray \u2013 Reached on Error"
+     "text": "Gray – Reached on Error"
     },
     {
      "inning": 1,
-     "text": "Harper \u2013 Single",
-     "runners": "Frankie \u2192 3rd, Gray \u2192 2nd"
+     "text": "Harper – Single",
+     "runners": "Frankie → 3rd, Gray → 2nd"
     },
     {
      "inning": 1,
-     "text": "Jordan \u2013 Single, 1 RBI",
-     "runners": "Frankie scored, Gray \u2192 3rd, Harper \u2192 2nd"
+     "text": "Jordan – Single, 1 RBI",
+     "runners": "Frankie scored, Gray → 3rd, Harper → 2nd"
     },
     {
      "inning": 1,
-     "text": "Kai \u2013 Pop out to SS"
+     "text": "Kai – Pop out to SS"
     },
     {
      "inning": 1,
-     "text": "Alex \u2013 Single, 1 RBI",
-     "runners": "Gray scored, Harper \u2192 3rd, Jordan \u2192 2nd"
+     "text": "Alex – Single, 1 RBI",
+     "runners": "Gray scored, Harper → 3rd, Jordan → 2nd"
     },
     {
      "inning": 1,
-     "text": "Blake \u2013 Fly out to RF"
+     "text": "Blake – Fly out to RF"
     },
     {
      "inning": 1,
-     "text": "Casey \u2013 Single, 2 RBI",
-     "runners": "Harper scored, Jordan scored, Alex \u2192 3rd"
+     "text": "Casey – Single, 2 RBI",
+     "runners": "Harper scored, Jordan scored, Alex → 3rd"
     },
     {
      "inning": 1,
-     "text": "Drew \u2013 Single, 1 RBI",
-     "runners": "Alex scored, Casey \u2192 3rd"
+     "text": "Drew – Single, 1 RBI",
+     "runners": "Alex scored, Casey → 3rd"
     },
     {
      "inning": 1,
-     "text": "Emery \u2013 Fly out to LF (inning ended)"
+     "text": "Emery – Fly out to LF (inning ended)"
     },
     {
      "inning": 2,
-     "text": "Frankie \u2013 Line out to RF"
+     "text": "Frankie – Line out to RF"
     },
     {
      "inning": 2,
-     "text": "Gray \u2013 Fly out to RC"
+     "text": "Gray – Fly out to RC"
     },
     {
      "inning": 2,
-     "text": "Harper \u2013 Reached on Error"
+     "text": "Harper – Reached on Error"
     },
     {
      "inning": 2,
-     "text": "Jordan \u2013 Ground out to 3B (inning ended)"
+     "text": "Jordan – Ground out to 3B (inning ended)"
     },
     {
      "inning": 3,
-     "text": "Kai \u2013 Reached on Error"
+     "text": "Kai – Reached on Error"
     },
     {
      "inning": 3,
-     "text": "Alex \u2013 Fly out to LF"
+     "text": "Alex – Fly out to LF"
     },
     {
      "inning": 3,
-     "text": "Blake \u2013 Strikeout looking"
+     "text": "Blake – Strikeout looking"
     },
     {
      "inning": 3,
-     "text": "Casey \u2013 Single",
-     "runners": "Kai \u2192 3rd"
+     "text": "Casey – Single",
+     "runners": "Kai → 3rd"
     },
     {
      "inning": 3,
-     "text": "Drew \u2013 Double, 2 RBI",
+     "text": "Drew – Double, 2 RBI",
      "runners": "Kai scored, Casey scored"
     },
     {
      "inning": 3,
-     "text": "Emery \u2013 Single, 1 RBI",
+     "text": "Emery – Single, 1 RBI",
      "runners": "Drew scored"
     },
     {
      "inning": 3,
-     "text": "Frankie \u2013 Single",
-     "runners": "Emery \u2192 3rd"
+     "text": "Frankie – Single",
+     "runners": "Emery → 3rd"
     },
     {
      "inning": 3,
-     "text": "Gray \u2013 Line out to LC (inning ended)"
+     "text": "Gray – Line out to LC (inning ended)"
     },
     {
      "inning": 4,
-     "text": "Harper \u2013 Pop out to SS"
+     "text": "Harper – Pop out to SS"
     },
     {
      "inning": 4,
-     "text": "Jordan \u2013 Triple"
+     "text": "Jordan – Triple"
     },
     {
      "inning": 4,
-     "text": "Kai \u2013 Pop out to 3B"
+     "text": "Kai – Pop out to 3B"
     }
    ],
    "live": {
     "inning": 4,
     "outs": 2,
     "batter": "Alex",
-    "third": "Jordan"
+    "third": "Jordan",
+    "pitcher": "Drew"
    },
    "event": "Fall 2026",
    "eventKind": "season"
@@ -1076,7 +1077,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Jordan",
-     "angle": 35.0,
+     "angle": 35,
      "distance": 1.079,
      "kind": "hr"
     },
@@ -1094,7 +1095,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Blake",
-     "angle": -28.0,
+     "angle": -28,
      "distance": 0.66,
      "kind": "out"
     },
@@ -1185,7 +1186,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Jordan",
-     "angle": 18.0,
+     "angle": 18,
      "distance": 1.058,
      "kind": "hr"
     },
@@ -1197,7 +1198,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Alex",
-     "angle": -33.0,
+     "angle": -33,
      "distance": 0.355,
      "kind": "out"
     },
@@ -1209,7 +1210,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Casey",
-     "angle": 9.0,
+     "angle": 9,
      "distance": 1.055,
      "kind": "hr"
     },
@@ -1321,285 +1322,303 @@ window.STATBOOK_DEMO = {
    "plays": [
     {
      "inning": 1,
-     "text": "Alex \u2013 Double"
+     "text": "Alex – Double"
     },
     {
      "inning": 1,
-     "text": "Blake \u2013 Single",
-     "runners": "Alex \u2192 3rd"
+     "text": "Blake – Single",
+     "runners": "Alex → 3rd"
     },
     {
      "inning": 1,
-     "text": "Casey \u2013 Single, 1 RBI",
-     "runners": "Alex scored, Blake \u2192 2nd"
+     "text": "Casey – Single, 1 RBI",
+     "runners": "Alex scored, Blake → 2nd"
     },
     {
      "inning": 1,
-     "text": "Drew \u2013 Walk"
+     "text": "Drew – Walk"
     },
     {
      "inning": 1,
-     "text": "Emery \u2013 Ground out to SS"
+     "text": "Emery – Ground out to SS"
     },
     {
      "inning": 1,
-     "text": "Frankie \u2013 Single, 1 RBI",
-     "runners": "Blake scored, Casey \u2192 3rd, Drew \u2192 2nd"
+     "text": "Frankie – Single, 1 RBI",
+     "runners": "Blake scored, Casey → 3rd, Drew → 2nd"
     },
     {
      "inning": 1,
-     "text": "Gray \u2013 Single, 1 RBI",
-     "runners": "Casey scored, Drew \u2192 3rd, Frankie \u2192 2nd"
+     "text": "Gray – Single, 1 RBI",
+     "runners": "Casey scored, Drew → 3rd, Frankie → 2nd"
     },
     {
      "inning": 1,
-     "text": "Harper \u2013 Home Run, 4 RBI",
+     "text": "Harper – Home Run, 4 RBI",
      "runners": "Drew scored, Frankie scored, Gray scored"
     },
     {
      "inning": 1,
-     "text": "Jordan \u2013 Single"
+     "text": "Jordan – Single"
     },
     {
      "inning": 1,
-     "text": "Kai \u2013 Ground out to SS"
+     "text": "Kai – Ground out to SS"
     },
     {
      "inning": 1,
-     "text": "Alex \u2013 Single",
-     "runners": "Jordan \u2192 3rd"
+     "text": "Alex – Single",
+     "runners": "Jordan → 3rd"
     },
     {
      "inning": 1,
-     "text": "Blake \u2013 Walk"
+     "text": "Blake – Walk"
     },
     {
      "inning": 1,
-     "text": "Casey \u2013 Fly out to RC (inning ended)"
+     "text": "Casey – Fly out to RC (inning ended)"
     },
     {
      "inning": 2,
-     "text": "Drew \u2013 Single"
+     "text": "Drew – Single"
     },
     {
      "inning": 2,
-     "text": "Emery \u2013 Fly out to LC"
+     "text": "Emery – Fly out to LC"
     },
     {
      "inning": 2,
-     "text": "Frankie \u2013 Single",
-     "runners": "Drew \u2192 2nd"
+     "text": "Frankie – Single",
+     "runners": "Drew → 2nd"
     },
     {
      "inning": 2,
-     "text": "Gray \u2013 Single",
-     "runners": "Drew \u2192 3rd, Frankie \u2192 2nd"
+     "text": "Gray – Single",
+     "runners": "Drew → 3rd, Frankie → 2nd"
     },
     {
      "inning": 2,
-     "text": "Harper \u2013 Single, 1 RBI",
-     "runners": "Drew scored, Frankie \u2192 3rd, Gray \u2192 2nd"
+     "text": "Harper – Single, 1 RBI",
+     "runners": "Drew scored, Frankie → 3rd, Gray → 2nd"
     },
     {
      "inning": 2,
-     "text": "Jordan \u2013 Home Run, 4 RBI",
+     "text": "Jordan – Home Run, 4 RBI",
      "runners": "Frankie scored, Gray scored, Harper scored"
     },
     {
      "inning": 2,
-     "text": "Kai \u2013 Fly out to LF"
+     "text": "Kai – Fly out to LF"
     },
     {
      "inning": 2,
-     "text": "Alex \u2013 Single"
+     "text": "Alex – Single"
     },
     {
      "inning": 2,
-     "text": "Blake \u2013 Fly out to LF (inning ended)"
+     "text": "Blake – Fly out to LF (inning ended)"
     },
     {
      "inning": 3,
-     "text": "Casey \u2013 Double"
+     "text": "Casey – Double"
     },
     {
      "inning": 3,
-     "text": "Drew \u2013 Fly out to LF"
+     "text": "Drew – Fly out to LF"
     },
     {
      "inning": 3,
-     "text": "Emery \u2013 Double, 1 RBI",
+     "text": "Emery – Double, 1 RBI",
      "runners": "Casey scored"
     },
     {
      "inning": 3,
-     "text": "Frankie \u2013 Fly out to LF"
+     "text": "Frankie – Fly out to LF"
     },
     {
      "inning": 3,
-     "text": "Gray \u2013 Pop out to 1B (inning ended)"
+     "text": "Gray – Pop out to 1B (inning ended)"
     },
     {
      "inning": 4,
-     "text": "Harper \u2013 Walk"
+     "text": "Harper – Walk"
     },
     {
      "inning": 4,
-     "text": "Jordan \u2013 Single",
-     "runners": "Harper \u2192 2nd"
+     "text": "Jordan – Single",
+     "runners": "Harper → 2nd"
     },
     {
      "inning": 4,
-     "text": "Kai \u2013 Walk"
+     "text": "Kai – Walk"
     },
     {
      "inning": 4,
-     "text": "Alex \u2013 Home Run, 4 RBI",
+     "text": "Alex – Home Run, 4 RBI",
      "runners": "Harper scored, Jordan scored, Kai scored"
     },
     {
      "inning": 4,
-     "text": "Blake \u2013 Single"
+     "text": "Blake – Single"
     },
     {
      "inning": 4,
-     "text": "Casey \u2013 Single",
-     "runners": "Blake \u2192 2nd"
+     "text": "Casey – Single",
+     "runners": "Blake → 2nd"
     },
     {
      "inning": 4,
-     "text": "Drew \u2013 Triple, 2 RBI",
+     "text": "Drew – Triple, 2 RBI",
      "runners": "Blake scored, Casey scored"
     },
     {
      "inning": 4,
-     "text": "Emery \u2013 Double, 1 RBI",
+     "text": "Emery – Double, 1 RBI",
      "runners": "Drew scored"
     },
     {
      "inning": 4,
-     "text": "Frankie \u2013 Pop out to SS"
+     "text": "Frankie – Pop out to SS"
     },
     {
      "inning": 4,
-     "text": "Gray \u2013 Single",
-     "runners": "Emery \u2192 3rd"
+     "text": "Gray – Single",
+     "runners": "Emery → 3rd"
     },
     {
      "inning": 4,
-     "text": "Harper \u2013 Single, 1 RBI",
-     "runners": "Emery scored, Gray \u2192 2nd"
+     "text": "Harper – Single, 1 RBI",
+     "runners": "Emery scored, Gray → 2nd"
     },
     {
      "inning": 4,
-     "text": "Jordan \u2013 Home Run, 3 RBI",
+     "text": "Jordan – Home Run, 3 RBI",
      "runners": "Gray scored, Harper scored"
     },
     {
      "inning": 4,
-     "text": "Kai \u2013 Double"
+     "text": "Kai – Double"
     },
     {
      "inning": 4,
-     "text": "Alex \u2013 Pop out to 3B"
+     "text": "Alex – Pop out to 3B"
     },
     {
      "inning": 4,
-     "text": "Blake \u2013 Pop out to 3B (inning ended)"
+     "text": "Blake – Pop out to 3B (inning ended)"
     },
     {
      "inning": 5,
-     "text": "Casey \u2013 Home Run, 1 RBI"
+     "text": "Casey – Home Run, 1 RBI"
     },
     {
      "inning": 5,
-     "text": "Drew \u2013 Walk"
+     "text": "Drew – Walk"
     },
     {
      "inning": 5,
-     "text": "Emery \u2013 Home Run, 2 RBI",
+     "text": "Emery – Home Run, 2 RBI",
      "runners": "Drew scored"
     },
     {
      "inning": 5,
-     "text": "Frankie \u2013 Fly out to LC"
+     "text": "Frankie – Fly out to LC"
     },
     {
      "inning": 5,
-     "text": "Gray \u2013 Single"
+     "text": "Gray – Single"
     },
     {
      "inning": 5,
-     "text": "Harper \u2013 Single",
-     "runners": "Gray \u2192 2nd"
+     "text": "Harper – Single",
+     "runners": "Gray → 2nd"
     },
     {
      "inning": 5,
-     "text": "Jordan \u2013 Fly out to RC"
+     "text": "Jordan – Fly out to RC"
     },
     {
      "inning": 5,
-     "text": "Kai \u2013 Ground out to 1B (inning ended)"
+     "text": "Kai – Ground out to 1B (inning ended)"
     },
     {
      "inning": 6,
-     "text": "Alex \u2013 Line out to RF"
+     "text": "Alex – Line out to RF"
     },
     {
      "inning": 6,
-     "text": "Blake \u2013 Double"
+     "text": "Blake – Double"
     },
     {
      "inning": 6,
-     "text": "Casey \u2013 Walk"
+     "text": "Casey – Walk"
     },
     {
      "inning": 6,
-     "text": "Drew \u2013 Single",
-     "runners": "Blake \u2192 3rd, Casey \u2192 2nd"
+     "text": "Drew – Single",
+     "runners": "Blake → 3rd, Casey → 2nd"
     },
     {
      "inning": 6,
-     "text": "Emery \u2013 Walk, 1 RBI",
+     "text": "Emery – Walk, 1 RBI",
      "runners": "Blake scored"
     },
     {
      "inning": 6,
-     "text": "Frankie \u2013 Ground out to 3B"
+     "text": "Frankie – Ground out to 3B"
     },
     {
      "inning": 6,
-     "text": "Gray \u2013 Fly out to RF (inning ended)"
+     "text": "Gray – Fly out to RF (inning ended)"
     },
     {
      "inning": 7,
-     "text": "Harper \u2013 Pop out to 1B"
+     "text": "Harper – Pop out to 1B"
     },
     {
      "inning": 7,
-     "text": "Jordan \u2013 Single"
+     "text": "Jordan – Single"
     },
     {
      "inning": 7,
-     "text": "Kai \u2013 Single",
-     "runners": "Jordan \u2192 2nd"
+     "text": "Kai – Single",
+     "runners": "Jordan → 2nd"
     },
     {
      "inning": 7,
-     "text": "Alex \u2013 Fly out to LF"
+     "text": "Alex – Fly out to LF"
     },
     {
      "inning": 7,
-     "text": "Blake \u2013 Single, 1 RBI",
-     "runners": "Jordan scored, Kai \u2192 3rd"
+     "text": "Blake – Single, 1 RBI",
+     "runners": "Jordan scored, Kai → 3rd"
     },
     {
      "inning": 7,
-     "text": "Casey \u2013 Ground out to SS (inning ended)"
+     "text": "Casey – Ground out to SS (inning ended)"
     }
    ],
    "outcome": "W",
    "event": "Fall 2026",
-   "eventKind": "season"
+   "eventKind": "season",
+   "pitching": [
+    {
+     "name": "Drew",
+     "outs": 15,
+     "r": 2,
+     "gs": 1,
+     "w": 1,
+     "l": 0
+    },
+    {
+     "name": "Emery",
+     "outs": 6,
+     "r": 4,
+     "gs": 0,
+     "w": 0,
+     "l": 0
+    }
+   ]
   },
   {
    "id": "F3308CE5-00EB-4E11-28B8-8073065B8C35",
@@ -1967,7 +1986,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Gray",
-     "angle": 28.0,
+     "angle": 28,
      "distance": 0.648,
      "kind": "out"
     },
@@ -2040,7 +2059,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Blake",
-     "angle": -17.0,
+     "angle": -17,
      "distance": 0.308,
      "kind": "out"
     },
@@ -2071,7 +2090,7 @@ window.STATBOOK_DEMO = {
     {
      "name": "Harper",
      "member": "demo-me",
-     "angle": 12.0,
+     "angle": 12,
      "distance": 0.68,
      "kind": "hit"
     },
@@ -2145,177 +2164,195 @@ window.STATBOOK_DEMO = {
    "plays": [
     {
      "inning": 1,
-     "text": "Alex \u2013 Home Run, 1 RBI"
+     "text": "Alex – Home Run, 1 RBI"
     },
     {
      "inning": 1,
-     "text": "Blake \u2013 Ground out to 3B"
+     "text": "Blake – Ground out to 3B"
     },
     {
      "inning": 1,
-     "text": "Casey \u2013 Fly out to RF"
+     "text": "Casey – Fly out to RF"
     },
     {
      "inning": 1,
-     "text": "Drew \u2013 Home Run, 1 RBI"
+     "text": "Drew – Home Run, 1 RBI"
     },
     {
      "inning": 1,
-     "text": "Emery \u2013 Double"
+     "text": "Emery – Double"
     },
     {
      "inning": 1,
-     "text": "Frankie \u2013 Fly out to RF (inning ended)"
+     "text": "Frankie – Fly out to RF (inning ended)"
     },
     {
      "inning": 2,
-     "text": "Gray \u2013 Fly out to RF"
+     "text": "Gray – Fly out to RF"
     },
     {
      "inning": 2,
-     "text": "Harper \u2013 Fly out to LC"
+     "text": "Harper – Fly out to LC"
     },
     {
      "inning": 2,
-     "text": "Jordan \u2013 Single"
+     "text": "Jordan – Single"
     },
     {
      "inning": 2,
-     "text": "Kai \u2013 Double, 1 RBI",
+     "text": "Kai – Double, 1 RBI",
      "runners": "Jordan scored"
     },
     {
      "inning": 2,
-     "text": "Alex \u2013 Double, 1 RBI",
+     "text": "Alex – Double, 1 RBI",
      "runners": "Kai scored"
     },
     {
      "inning": 2,
-     "text": "Blake \u2013 Single, 1 RBI",
+     "text": "Blake – Single, 1 RBI",
      "runners": "Alex scored"
     },
     {
      "inning": 2,
-     "text": "Casey \u2013 Single",
-     "runners": "Blake \u2192 3rd"
+     "text": "Casey – Single",
+     "runners": "Blake → 3rd"
     },
     {
      "inning": 2,
-     "text": "Drew \u2013 Single, 1 RBI",
-     "runners": "Blake scored, Casey \u2192 3rd"
+     "text": "Drew – Single, 1 RBI",
+     "runners": "Blake scored, Casey → 3rd"
     },
     {
      "inning": 2,
-     "text": "Emery \u2013 Pop out to 3B (inning ended)"
+     "text": "Emery – Pop out to 3B (inning ended)"
     },
     {
      "inning": 3,
-     "text": "Frankie \u2013 Strikeout looking"
+     "text": "Frankie – Strikeout looking"
     },
     {
      "inning": 3,
-     "text": "Gray \u2013 Fly out to RF"
+     "text": "Gray – Fly out to RF"
     },
     {
      "inning": 3,
-     "text": "Harper \u2013 Walk"
+     "text": "Harper – Walk"
     },
     {
      "inning": 3,
-     "text": "Jordan \u2013 Strikeout looking (inning ended)"
+     "text": "Jordan – Strikeout looking (inning ended)"
     },
     {
      "inning": 4,
-     "text": "Kai \u2013 Pop out to 1B"
+     "text": "Kai – Pop out to 1B"
     },
     {
      "inning": 4,
-     "text": "Alex \u2013 Single"
+     "text": "Alex – Single"
     },
     {
      "inning": 4,
-     "text": "Blake \u2013 Pop out to SS"
+     "text": "Blake – Pop out to SS"
     },
     {
      "inning": 4,
-     "text": "Casey \u2013 Line out to RF (inning ended)"
+     "text": "Casey – Line out to RF (inning ended)"
     },
     {
      "inning": 5,
-     "text": "Drew \u2013 Strikeout looking"
+     "text": "Drew – Strikeout looking"
     },
     {
      "inning": 5,
-     "text": "Emery \u2013 Home Run, 1 RBI"
+     "text": "Emery – Home Run, 1 RBI"
     },
     {
      "inning": 5,
-     "text": "Frankie \u2013 Pop out to 3B"
+     "text": "Frankie – Pop out to 3B"
     },
     {
      "inning": 5,
-     "text": "Gray \u2013 Ground out to 2B (inning ended)"
+     "text": "Gray – Ground out to 2B (inning ended)"
     },
     {
      "inning": 6,
-     "text": "Harper \u2013 Single"
+     "text": "Harper – Single"
     },
     {
      "inning": 6,
-     "text": "Jordan \u2013 Fly out to LF"
+     "text": "Jordan – Fly out to LF"
     },
     {
      "inning": 6,
-     "text": "Kai \u2013 Single",
-     "runners": "Harper \u2192 2nd"
+     "text": "Kai – Single",
+     "runners": "Harper → 2nd"
     },
     {
      "inning": 6,
-     "text": "Alex \u2013 Pop out to SS"
+     "text": "Alex – Pop out to SS"
     },
     {
      "inning": 6,
-     "text": "Blake \u2013 Single, 1 RBI",
-     "runners": "Harper scored, Kai \u2192 3rd"
+     "text": "Blake – Single, 1 RBI",
+     "runners": "Harper scored, Kai → 3rd"
     },
     {
      "inning": 6,
-     "text": "Casey \u2013 Pop out to 2B (inning ended)"
+     "text": "Casey – Pop out to 2B (inning ended)"
     },
     {
      "inning": 7,
-     "text": "Drew \u2013 Single"
+     "text": "Drew – Single"
     },
     {
      "inning": 7,
-     "text": "Emery \u2013 Ground out to 2B"
+     "text": "Emery – Ground out to 2B"
     },
     {
      "inning": 7,
-     "text": "Frankie \u2013 Fly out to RF"
+     "text": "Frankie – Fly out to RF"
     },
     {
      "inning": 7,
-     "text": "Gray \u2013 Single",
-     "runners": "Drew \u2192 3rd"
+     "text": "Gray – Single",
+     "runners": "Drew → 3rd"
     },
     {
      "inning": 7,
-     "text": "Harper \u2013 Walk"
+     "text": "Harper – Walk"
     },
     {
      "inning": 7,
-     "text": "Jordan \u2013 Single, 2 RBI",
-     "runners": "Drew scored, Gray scored, Harper \u2192 3rd"
+     "text": "Jordan – Single, 2 RBI",
+     "runners": "Drew scored, Gray scored, Harper → 3rd"
     },
     {
      "inning": 7,
-     "text": "Kai \u2013 Fly out to RF (inning ended)"
+     "text": "Kai – Fly out to RF (inning ended)"
     }
    ],
    "outcome": "L",
    "event": "Labor Day Classic",
-   "eventKind": "tournament"
+   "eventKind": "tournament",
+   "pitching": [
+    {
+     "name": "Drew",
+     "outs": 15,
+     "r": 17,
+     "gs": 1,
+     "w": 0,
+     "l": 1
+    },
+    {
+     "name": "Emery",
+     "outs": 6,
+     "r": 10,
+     "gs": 0,
+     "w": 0,
+     "l": 0
+    }
+   ]
   }
  ],
  "members": [

@@ -6,10 +6,13 @@
 // Bases are numbers: 0 out, 1 first, 2 second, 3 third, 4 home (scored). A game is a plain object:
 //   { id, date ("yyyy-MM-dd"), team, opponent, lineup: [Player], bench: [Player], subs: { id: id },
 //     extras: [Player], plays: [Play], courtesySwaps: [Swap], opponentRuns: { inning: runs },
-//     isFinal, isHome, isSolo, event: { kind: "season"|"tournament", name } | null }
+//     isFinal, isHome, isSolo, event: { kind: "season"|"tournament", name } | null,
+//     pitching?: [PitchingChange], fieldInnings?, lastFieldOuts? }
 //   Player { id, name, member? }   Play { id, inning, batterID, result, batterTo, runners: [{ playerID, from, to }],
 //   rbi, endsInning, outType?, fielder?, location?: { angle, distance } }
 //   Swap { id, beforePlay, base, originalID, runnerID }
+//   PitchingChange { id, inning, outs, runs, player: { id, name, member? } }: from the opponent's half of `inning`,
+//   after `outs` outs (with `runs` already scored that half), `player` pitched.
 
 (function (root) {
   "use strict";
@@ -480,6 +483,73 @@
     return { innings: Array.from({ length: lastInning }, (_, i) => i + 1), entries, currentInning: s.inning, runsByInning: s.runsByInning };
   }
 
+  // ---------- Pitching ----------
+  //
+  // Only our own at-bats are scored play by play; the other team's half is just runs per inning. So pitching comes
+  // from who was pitching when (g.pitching), the innings we spent in the field, and those runs. Every run counts as
+  // earned (errors behind the pitcher aren't tracked), and ERA is per 7 innings, slow pitch's game length.
+
+  const pitchingOrder = g => [...(g.pitching || [])].sort((a, b) => a.inning - b.inning || a.outs - b.outs);
+
+  /// The opponent's half-innings we've been in the field for: { innings, lastOuts }. Worked out from the score unless
+  /// the scorer set it (g.fieldInnings / g.lastFieldOuts), e.g. at home without needing to bat in the last inning.
+  function fieldInnings(g) {
+    const s = state(g);
+    const lastBatted = Math.max(0, ...g.plays.map(p => p.inning));
+    const lastScored = Math.max(0, ...Object.keys(g.opponentRuns || {}).map(Number));
+    let innings;
+    if (g.isFinal) innings = Math.max(lastBatted, lastScored, 1);
+    // Live: at home they bat first each inning (done through the one we're in); away they bat after us.
+    else innings = Math.max(g.isHome ? s.inning : s.inning - 1, lastScored, 0);
+    if (g.fieldInnings != null) innings = g.fieldInnings;
+    // A loss on the road where they scored in their last half is a walk-off: that half didn't get 3 outs.
+    const walkOff = g.isFinal && !g.isHome && outcome(g) === "L" && ((g.opponentRuns || {})[innings] || 0) > 0;
+    const lastOuts = g.lastFieldOuts != null ? g.lastFieldOuts : walkOff ? 2 : 3;
+    return { innings, lastOuts, walkOff };
+  }
+
+  /// Each pitcher's line for one game: { player, outs, runs, started, decision: "W" | "L" | null }.
+  function pitchingLines(g) {
+    const changes = pitchingOrder(g);
+    if (!changes.length) return [];
+    const { innings, lastOuts } = fieldInnings(g);
+    const lines = new Map();
+    const lineFor = c => {
+      const key = c.player.member ? `m:${c.player.member}` : `n:${String(c.player.name).trim().toLowerCase()}`;
+      if (!lines.has(key)) lines.set(key, { player: c.player, outs: 0, runs: 0, started: false, decision: null, order: lines.size });
+      return lines.get(key);
+    };
+    lineFor(changes[0]).started = true;
+    for (let i = 1; i <= innings; i++) {
+      const total = i === innings ? lastOuts : 3;
+      const runsThere = (g.opponentRuns || {})[i] || 0;
+      // Whoever was pitching as the half started, then each change during it.
+      const atStart = changes.filter(c => c.inning < i || (c.inning === i && !c.outs)).pop();
+      const during = changes.filter(c => c.inning === i && c.outs > 0 && c.outs < 3);
+      const parts = [...(atStart ? [{ ...atStart, outs: 0, runs: 0 }] : []), ...during];
+      parts.forEach((c, k) => {
+        const next = parts[k + 1];
+        const from = Math.min(c.outs, total), to = next ? Math.min(next.outs, total) : total;
+        const r0 = Math.min(c.runs || 0, runsThere), r1 = next ? Math.min(Math.max(next.runs || 0, r0), runsThere) : runsThere;
+        const l = lineFor(c);
+        l.outs += Math.max(0, to - from);
+        l.runs += Math.max(0, r1 - r0);
+      });
+    }
+    // Pitcher of record: the one who pitched the most (ties go to whoever pitched first).
+    const oc = outcome(g);
+    const all = [...lines.values()];
+    if ((oc === "W" || oc === "L") && all.length) all.reduce((a, b) => (b.outs > a.outs ? b : a)).decision = oc;
+    return all.sort((a, b) => a.order - b.order).map(({ order, ...l }) => l);
+  }
+
+  /// Who's pitching right now (the latest change), or null.
+  const currentPitcher = g => pitchingOrder(g).pop()?.player || null;
+
+  /// "4.1" for 13 outs.
+  const inningsText = outs => `${Math.floor(outs / 3)}${outs % 3 ? "." + (outs % 3) : ""}`;
+  const era = (runs, outs) => (outs ? (runs * 21) / outs : null);
+
   // ---------- What the website shows (same shape the app publishes) ----------
 
   function publishedLine(l) {
@@ -515,6 +585,14 @@
       if (m) d.member = m;
       return [Object.assign(d, { angle: p.location.angle, distance: p.location.distance, kind })];
     });
+    const pitching = pitchingLines(g);
+    if (pitching.length) {
+      out.pitching = pitching.map(l => {
+        const x = { name: l.player.name };
+        if (l.player.member) x.member = l.player.member;
+        return Object.assign(x, { outs: l.outs, r: l.runs, gs: l.started ? 1 : 0, w: l.decision === "W" ? 1 : 0, l: l.decision === "L" ? 1 : 0 });
+      });
+    }
     out.plays = g.plays.map(p => {
       const r = { inning: p.inning, text: describe(g, p) };
       const rs = runnerSummary(g, p);
@@ -526,6 +604,7 @@
       for (const [b, key] of [[FIRST, "first"], [SECOND, "second"], [THIRD, "third"]]) {
         if (s.bases[b] != null) live[key] = nameFor(g, s.bases[b]);
       }
+      if (currentPitcher(g)) live.pitcher = currentPitcher(g).name;
       out.live = live;
     }
     return out;
@@ -701,7 +780,7 @@
     runsScored, outsRecorded, normalizedForSacrifice, bookCode, scorebookMark, cornerMark, circledLabel, detailTitle, sprayKind,
     allPlayers, player, nameFor, currentID, state, renumberInnings, deletePlay, canEndInning, opponentTotal, outcome, codes,
     defaultDestination, defaultPlay, asksWhatHappened, runnerSummary, describe,
-    statLines, totals, book, publishedGame, Outcome, addCourtesyRunner, undo, endInning,
+    statLines, totals, book, publishedGame, fieldInnings, pitchingLines, pitchingOrder, currentPitcher, inningsText, era, Outcome, addCourtesyRunner, undo, endInning,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.StatEngine = api;

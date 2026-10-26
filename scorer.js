@@ -540,7 +540,7 @@ window.StatScorer = function (ctx) {
 
   // ---------- New game ----------
 
-  const draftNew = { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "" };
+  const draftNew = { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "", pitcher: "" };
 
   function newGameView() {
     if (!isManagerHere()) return listView();
@@ -594,6 +594,12 @@ window.StatScorer = function (ctx) {
 
       ...lineupBuilder(draftNew),
       h("div", { class: "legend" }, "Checked players bat in this order; use the arrows to set it. Teammates are linked to their accounts (●), so their stats follow them. Fill-ins can be added here or during the game."),
+      on.length ? h("label", { class: "inline-field" }, "Starting pitcher", (() => {
+        const sel = h("select", { "aria-label": "Starting pitcher", onchange: e => { draftNew.pitcher = e.target.value; } },
+          h("option", { value: "" }, "Pick later"), on.map(p => h("option", { value: p.id }, p.name)));
+        sel.value = on.some(p => p.id === draftNew.pitcher) ? draftNew.pitcher : "";
+        return sel;
+      })()) : null,
       h("div", { class: "form-actions" },
         h("a", { class: "btn ghost", href: "#/score" }, "Cancel"),
         h("button", { class: "btn", type: "button", disabled: !on.length || null, onclick: async e => {
@@ -723,8 +729,10 @@ window.StatScorer = function (ctx) {
       isFinal: false, isHome: draftNew.isHome, isSolo: false,
       event: draftNew.eventKind && eventName ? { kind: draftNew.eventKind, name: eventName } : null,
     };
+    const starter = g.lineup.find(p => p.id === draftNew.pitcher);
+    if (starter) g.pitching = [{ id: E.newID(), inning: 1, outs: 0, runs: 0, player: { ...starter } }];
     const id = await createGame(g);
-    if (id) Object.assign(draftNew, { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "" });
+    if (id) Object.assign(draftNew, { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "", pitcher: "" });
     return id;
   }
 
@@ -872,6 +880,8 @@ window.StatScorer = function (ctx) {
 
     const body = g.isFinal ? finalView(rec, s) : [
       h("div", { class: "scoreboard" }, cells),
+      h("button", { type: "button", class: `pitcher-bar${pitcherLabel(g) ? "" : " unset"}`, onclick: () => { ui.sheet = { type: "pitching" }; render(); } },
+        h("span", { class: "k" }, "Pitching"), h("b", null, pitcherLabel(g) || "Set who's pitching"), h("span", { class: "chev" }, "›")),
       h("div", { class: "batter" },
         h("div", { class: "k" }, `Now batting · #${s.batterIndex + 1}`),
         h("div", { class: "name" }, batter.name),
@@ -1050,6 +1060,8 @@ window.StatScorer = function (ctx) {
           h("i", { class: i === 0 ? "lead" : null }, String(idx + 1)),
           h("div", null, h("b", null, g.lineup[idx].name), E.codes(g, g.lineup[idx].id) ? h("div", { class: "muted small" }, E.codes(g, g.lineup[idx].id)) : null),
           i === 0 ? h("span", { class: "lead-tag" }, "Leading off") : null))),
+      h("button", { type: "button", class: `pitcher-bar${pitcherLabel(g) ? "" : " unset"}`, onclick: () => { ui.sheet = { type: "pitching" }; render(); } },
+        h("span", { class: "k" }, "Pitching"), h("b", null, pitcherLabel(g) || "Set who's pitching"), h("span", { class: "chev" }, pitcherLabel(g) ? "Change ›" : "›")),
       btn("Start Hitting", () => { ui.breakAfter = null; render(); }, "big hit"),
       btn("End Game", () => { ui.breakAfter = null; ui.sheet = { type: "end" }; render(); }, "soft danger")));
   }
@@ -1064,6 +1076,7 @@ window.StatScorer = function (ctx) {
         h("div", { class: "form-actions start" },
           uploaded ? h("a", { class: "btn", href: `#/game/${encodeURIComponent(g.id)}`, onclick: () => ctx.refreshNow() }, "View Game") : null,
           btn("Box Score & Plays", () => { ui.sheet = { type: "box" }; render(); }, "soft"),
+          btn("Pitching", () => { ui.sheet = { type: "pitching" }; render(); }, "soft"),
           btn("Reopen Game", async () => { await change(rec, x => { x.isFinal = false; }); render(); }, "soft"))),
     ];
   }
@@ -1077,6 +1090,7 @@ window.StatScorer = function (ctx) {
       case "edit": return editSheet(rec, g, sh);
       case "courtesy": return courtesySheet(rec, g, s, sh.base);
       case "opponent": return opponentSheet(rec, g, s);
+      case "pitching": return pitchingSheet(rec, g, s, sh);
       case "menu": return menuSheet(rec, g);
       case "box": return boxSheet(rec, g);
       case "lineup": return lineupSheet(rec, g, sh);
@@ -1238,12 +1252,109 @@ window.StatScorer = function (ctx) {
     ]);
   }
 
+  // ---------- Pitching ----------
+
+  /// The opponent half-inning a change made now applies to: the one in progress during an inning break,
+  /// otherwise the next one they bat in (at home they bat first each inning, away after us).
+  function nextFieldInning(g, s) {
+    const during = ui.breakAfter != null;
+    return Math.max(1, g.isHome ? (during ? s.inning : s.inning + 1) : (during ? s.inning - 1 : s.inning));
+  }
+  const pitcherLabel = g => E.currentPitcher(g)?.name || null;
+
+  /// Who's pitching: pick someone (or change pitchers from a given inning and out), and the game's pitching lines.
+  function pitchingSheet(rec, g, s, sh) {
+    const changes = E.pitchingOrder(g);
+    const current = E.currentPitcher(g);
+    if (sh.inning == null) Object.assign(sh, { inning: nextFieldInning(g, s), outs: 0, runs: 0, write: "" });
+    const players = [];
+    const seen = new Set();
+    for (const p of [...g.lineup, ...(g.bench || [])]) {
+      const key = p.member || p.name.trim().toLowerCase();
+      if (!seen.has(key)) { seen.add(key); players.push(p); }
+    }
+    const samePerson = (a, b) => !!a && !!b && (a.member ? a.member === b.member : a.name.trim().toLowerCase() === b.name.trim().toLowerCase());
+    const choose = async player => {
+      const entry = { id: E.newID(), player: { id: player.id || E.newID(), name: player.name, ...(player.member ? { member: player.member } : {}) },
+        ...(changes.length ? { inning: sh.inning, outs: sh.outs, runs: sh.outs ? sh.runs : 0 } : { inning: 1, outs: 0, runs: 0 }) };
+      const ok = await change(rec, x => {
+        // A change at the same moment as another replaces it.
+        x.pitching = (x.pitching || []).filter(c => !(c.inning === entry.inning && c.outs === entry.outs));
+        x.pitching.push(entry);
+        x.pitching = E.pitchingOrder(x);
+      });
+      if (ok) { ui.sheet = null; navigator.vibrate?.(10); }
+      render();
+    };
+    const remove = id => change(rec, x => { x.pitching = (x.pitching || []).filter(c => c.id !== id); }).then(render);
+    const writeIn = () => { const n = sh.write.trim(); if (n) choose(linkedPlayer(rec, n)); };
+    const when = c => (c.inning === 1 && !c.outs && c === changes[0] ? "Started" : `${ordinal(c.inning)} inning${c.outs ? `, after ${c.outs} out${c.outs === 1 ? "" : "s"}` : ""}`);
+    const lines = E.pitchingLines(g);
+    const field = E.fieldInnings(g);
+    const lastInning = Math.max(field.innings + 1, s.inning, ...changes.map(c => c.inning));
+    const inningSel = h("select", { "aria-label": "Inning", onchange: e => { sh.inning = Number(e.target.value); sh.runs = sh.outs ? ((g.opponentRuns || {})[sh.inning] || 0) : 0; render(); } },
+      Array.from({ length: lastInning }, (_, i) => h("option", { value: String(i + 1) }, `${ordinal(i + 1)} inning`)));
+    inningSel.value = String(sh.inning);
+    const outsSel = h("select", { "aria-label": "Outs", onchange: e => { sh.outs = Number(e.target.value); sh.runs = sh.outs ? ((g.opponentRuns || {})[sh.inning] || 0) : 0; render(); } },
+      h("option", { value: "0" }, "From the start"), h("option", { value: "1" }, "After 1 out"), h("option", { value: "2" }, "After 2 outs"));
+    outsSel.value = String(sh.outs);
+    const setField = (k, v) => change(rec, x => { x[k] = v; }).then(render);
+
+    return sheet("Pitching", [
+      current ? h("div", { class: "pitch-now" }, h("span", { class: "k" }, "Pitching now"), h("b", null, current.name))
+        : h("div", { class: "muted" }, "Who's pitching? Pick them below; you can change pitchers any time."),
+      changes.length ? [
+        h("div", { class: "k" }, "Change pitchers"),
+        h("div", { class: "row2" }, h("label", null, "Starting in the", inningSel), h("label", null, "When", outsSel)),
+        sh.outs ? h("div", { class: "opp-row" }, h("span", null, `Runs they'd scored that inning before the change`),
+          h("span", { class: "stepper" },
+            h("button", { type: "button", "aria-label": "One less run", onclick: () => { sh.runs = Math.max(0, sh.runs - 1); render(); } }, "−"),
+            h("b", null, String(sh.runs)),
+            h("button", { type: "button", "aria-label": "One more run", onclick: () => { sh.runs += 1; render(); } }, "+"))) : null,
+      ] : null,
+      h("div", { class: "k" }, changes.length ? "New pitcher" : "Starting pitcher"),
+      h("div", { class: "btn-grid" }, players.map(p => h("button", { type: "button", class: `chip${samePerson(p, current) ? " on base" : ""}`,
+        disabled: (changes.length && samePerson(p, current)) || null, onclick: () => choose(p) }, p.name))),
+      h("div", { class: "pin-search" },
+        h("input", { type: "text", placeholder: "Someone else", maxlength: "80", list: namesList(), value: sh.write, "aria-label": "Pitcher's name",
+          oninput: e => { sh.write = e.target.value; }, onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); writeIn(); } } }),
+        h("button", { type: "button", class: "btn small", onclick: writeIn }, "Pitch")),
+      changes.length ? [
+        h("div", { class: "k" }, "This game"),
+        h("div", { class: "card pbp" }, changes.map(c => h("div", { class: "play pitch-change" },
+          h("div", null, h("b", null, c.player.name), h("div", { class: "r" }, when(c) + (c.outs && c.runs ? ` · ${c.runs} run${c.runs === 1 ? "" : "s"} in before` : ""))),
+          h("button", { type: "button", class: "link-btn danger", "aria-label": `Remove ${c.player.name}`, onclick: () => remove(c.id) }, "Remove")))),
+        lines.length ? statsTable([{ key: "name", label: "Pitcher" }, { key: "ip", label: "IP" }, { key: "r", label: "R" }, { key: "era", label: "ERA" }],
+          lines.map(l => ({ name: l.player.name + (l.decision ? ` (${l.decision})` : ""), ip: E.inningsText(l.outs), r: l.runs,
+            era: l.outs ? E.era(l.runs, l.outs).toFixed(2) : "–" }))) : null,
+      ] : null,
+      g.isFinal && changes.length ? [
+        h("div", { class: "k" }, "Innings in the field"),
+        h("div", { class: "opp-row" }, h("span", null, "Innings they batted"),
+          h("span", { class: "stepper" },
+            h("button", { type: "button", "aria-label": "One fewer inning", onclick: () => setField("fieldInnings", Math.max(1, field.innings - 1)) }, "−"),
+            h("b", null, String(field.innings)),
+            h("button", { type: "button", "aria-label": "One more inning", onclick: () => setField("fieldInnings", field.innings + 1) }, "+"))),
+        h("div", { class: "opp-row" }, h("span", null, `Outs in their ${ordinal(field.innings)}`),
+          h("span", { class: "stepper" },
+            h("button", { type: "button", "aria-label": "One fewer out", onclick: () => setField("lastFieldOuts", Math.max(0, field.lastOuts - 1)) }, "−"),
+            h("b", null, String(field.lastOuts)),
+            h("button", { type: "button", "aria-label": "One more out", onclick: () => setField("lastFieldOuts", Math.min(3, field.lastOuts + 1)) }, "+"))),
+        h("div", { class: "muted small" }, field.walkOff && g.lastFieldOuts == null
+          ? "They won it in their last at-bat, so that inning is counted as 2 outs. Fix it here if it was different."
+          : "Worked out from the score. Change it if, say, you were home and didn't need to bat in the last inning."),
+      ] : null,
+      h("div", { class: "muted small" }, "ERA counts every run (errors aren't tracked) over 7 innings. The win or loss goes to whoever pitched the most."),
+    ], { wide: true });
+  }
+
   function menuSheet(rec, g) {
     const go = type => () => { ui.sheet = { type }; render(); };
     return sheet("Game", h("div", { class: "menu-list" },
       btn("Box Score & Edit Plays", go("box"), "menu-item"),
       btn("Lineup & Subs", () => { ui.sheet = { type: "lineup", work: null }; render(); }, "menu-item"),
       btn("Opponent Runs", go("opponent"), "menu-item"),
+      btn(pitcherLabel(g) ? `Pitching · ${pitcherLabel(g)}` : "Pitching", go("pitching"), "menu-item"),
       btn("Date, Opponent & Season", () => { ui.sheet = { type: "details", work: null }; render(); }, "menu-item"),
       btn("Runner Defaults", go("rules"), "menu-item"),
       btn("End Inning (run limit)", async () => {
@@ -1282,6 +1393,9 @@ window.StatScorer = function (ctx) {
       h("div", { class: "board game-head" }, scorePair(g, s)),
       lineScore(E.publishedGame(g)),
       lines.length ? statsTable(BATTING, lines) : null,
+      E.pitchingLines(g).length ? statsTable([{ key: "name", label: "Pitcher" }, { key: "ip", label: "IP" }, { key: "r", label: "R" }, { key: "era", label: "ERA" }],
+        E.pitchingLines(g).map(l => ({ name: l.player.name + (l.decision ? ` (${l.decision})` : ""), ip: E.inningsText(l.outs), r: l.runs,
+          era: l.outs ? E.era(l.runs, l.outs).toFixed(2) : "–" }))) : null,
       window.StatBook ? StatBook.panel(g) : null,
       h("div", { class: "k" }, "Plays · tap to edit"),
       h("div", { class: "card pbp" }, [...byInning.entries()].map(([inn, plays]) => [

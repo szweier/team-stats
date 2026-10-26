@@ -193,6 +193,23 @@ window.StatBook = (function () {
       });
       y += RH;
     });
+    // Pitching.
+    const pitchers = E.pitchingLines(g);
+    if (pitchers.length) {
+      y += 16;
+      const pCols = [["IP", l => E.inningsText(l.outs)], ["R", l => String(l.runs)], ["ERA", l => (l.outs ? E.era(l.runs, l.outs).toFixed(2) : "–")], ["DEC", l => l.decision || ""]];
+      const pW = [NW, ...pCols.map(() => C + 12)];
+      head(["Pitching", ...pCols.map(c => c[0])], pW);
+      pitchers.forEach((l, i) => {
+        let x = PAD;
+        if (i % 2) out.push(rect(PAD, y, width - PAD * 2, RH, `fill="${STRIPE}"`));
+        [fitName(l.player.name, 16), ...pCols.map(c => c[1](l))].forEach((v, k) => {
+          out.push(text(k === 0 ? x + 8 : x + pW[k] / 2, y + RH / 2, v, { size: 13, weight: k === 0 ? 700 : 500, anchor: k === 0 ? "start" : "middle" }));
+          x += pW[k];
+        });
+        y += RH;
+      });
+    }
     y += PAD;
     return { width, height: y, svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${y}" width="${width}" height="${y}">${rect(0, 0, width, y, `fill="${PAPER}"`)}${out.join("")}</svg>` };
   }
@@ -211,6 +228,11 @@ window.StatBook = (function () {
     const row = l => [l.pa, l.ab, l.runs, l.courtesyRuns, l.hits, l.singles, l.doubles, l.triples, l.homeRuns, l.rbi, l.walks, l.sacFlies, l.kLooking + l.kSwinging + l.kFoul];
     out += "Player," + H.join(",") + "\n";
     for (const l of [...E.statLines(g), E.totals(g)]) out += [l.player.name, ...row(l)].join(",") + "\n";
+    const pitchers = E.pitchingLines(g);
+    if (pitchers.length) {
+      out += "\nPitcher,IP,R,ERA,Decision\n";
+      for (const l of pitchers) out += [l.player.name, E.inningsText(l.outs), l.runs, l.outs ? E.era(l.runs, l.outs).toFixed(2) : "", l.decision || ""].join(",") + "\n";
+    }
     out += "\nPLAYS\n";
     for (const p of g.plays) {
       const r = E.runnerSummary(g, p);
