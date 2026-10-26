@@ -8,13 +8,19 @@
   <title>Team Stats</title>
   <link rel="icon" type="image/png" href="favicon.png">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Hosts like GitHub Pages let browsers keep old copies for up to 10 minutes, so load the latest
+    // styles, config and code every time (otherwise an update wouldn't show right away).
+    var css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "styles.css?v=" + Date.now();
+    document.head.appendChild(css);
+  </script>
+  <noscript><link rel="stylesheet" href="styles.css"></noscript>
 </head>
 <body>
   <div id="app" aria-live="polite"></div>
   <script>
-    // Always load the latest config and code: hosts like GitHub Pages let browsers keep old copies
-    // for up to 10 minutes, so an update (or a just-filled-in config.js) wouldn't show right away.
     (function load(files) {
       if (!files.length) return;
       var s = document.createElement("script");
