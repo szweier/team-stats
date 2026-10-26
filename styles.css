@@ -608,4 +608,11 @@ details.fold.past summary { margin-bottom: 10px; }
 .link-row[disabled] { opacity: 0.45; cursor: default; }
 .game-form .lineup-check { display: flex; text-transform: none; letter-spacing: 0; font: 700 16px/1.3 var(--round); color: var(--text); }
 .game-form .lineup-check .muted { font-weight: 600; }
-.brand .record .sub.season { display: block; max-width: 34vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brand .record .sub.season { display: flex; justify-content: flex-end; align-items: baseline; gap: 4px; max-width: 30vw; white-space: nowrap; }
+.brand .record .season-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.brand .record .caret { flex: 0 0 auto; }
+/* Header season picker: the record, with an invisible dropdown laid over it */
+.brand .record.picker { position: relative; cursor: pointer; padding: 4px 6px; margin-right: -6px; border-radius: 10px; }
+.brand .record.picker:active { background: rgba(255, 255, 255, 0.08); }
+.brand .record .caret { color: var(--optic); }
+.season-select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 16px; -webkit-appearance: none; appearance: none; }

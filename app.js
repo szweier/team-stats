@@ -52,7 +52,6 @@
     myScope: "",          // My Stats: "" = this team, "all" = every team you're on
     myAll: null,          // their games once loaded (or "loading")
     myYear: "",
-    myEvent: null,        // like `event`: null = the newest season
     flash: "",            // one-time message shown at the top of a page
   };
 
@@ -143,22 +142,28 @@
     return e ? eventLabel(e) : "";
   }
 
-  /// Season / tournament dropdown, or nothing when no game has one.
-  function eventSelect() {
+  /// The season picker in the header: the record shown, laid over an invisible dropdown so tapping it opens the
+  /// phone's own list. The season chosen applies to every page (Games, Stats, My Stats, Spray).
+  function seasonPicker(shown) {
     const events = eventsOf(state.games);
-    if (!events.length) return null;
+    const label = currentEventLabel() || (events.length ? "All seasons" : "Record");
+    const short = events.find(e => e.key === currentEvent())?.name || label;   // no "(Tournament)" up here
+    const face = [h("b", null, record(shown)), h("span", { class: "sub season" },
+      h("span", { class: "season-name" }, short), events.length ? h("span", { class: "caret", "aria-hidden": "true" }, "▾") : null)];
+    if (!events.length) return h("div", { class: "record" }, face);
     const key = currentEvent();
     const option = (value, text) => { const o = h("option", { value }, text); if (value === key) o.selected = true; return o; };
     const seasons = events.filter(e => e.kind !== "tournament");
     const tournaments = events.filter(e => e.kind === "tournament");
-    return h("select", {
-      class: "control", "aria-label": "Season or tournament",
+    const sel = h("select", {
+      class: "season-select", "aria-label": `Season: ${label}. Choose a season or tournament`,
       onchange: e => { chooseEvent(e.target.value || "all"); render(); },
     },
       option("", "All seasons"),
       seasons.length ? h("optgroup", { label: "Seasons" }, seasons.map(e => option(e.key, e.name))) : null,
       tournaments.length ? h("optgroup", { label: "Tournaments" }, tournaments.map(e => option(e.key, e.name))) : null,
       state.games.some(g => !g.event) ? option("none", "No season") : null);
+    return h("label", { class: "record picker" }, face, sel);
   }
   const us = g => g.team || "Us";
   const them = g => g.opponent || "Them";
@@ -915,7 +920,6 @@
   function shell(current, content) {
     const shown = state.games.filter(inEvent);
     const finals = shown.filter(g => g.isFinal);
-    const seasonLabel = currentEventLabel();
     const tab = (name, href, label) => h("a", { href, class: current === name ? "on" : null }, label);
     return [
       h("header", { class: "topbar" }, h("div", { class: "wrap" },
@@ -925,7 +929,7 @@
             h("h1", null, state.team?.name || "Team"),
             h("div", { class: "sub" }, `${state.members.length} player${state.members.length === 1 ? "" : "s"} · ${finals.length} game${finals.length === 1 ? "" : "s"} played`,
               DEMO ? " " : "", DEMO ? h("span", { class: "pill demo" }, "Demo data") : null)),
-          h("div", { class: "record" }, h("b", null, record(shown)), h("span", { class: "sub season", title: seasonLabel ? `${seasonLabel} record` : "Record" }, seasonLabel || "Record"))),
+          seasonPicker(shown)),
         h("nav", { class: "tabs", "aria-label": "Sections" },
           tab("schedule", "#/", "Schedule"), tab("games", "#/games", "Games"), tab("stats", "#/stats", "Stats"),
           tab("me", "#/me", "My Stats"), tab("spray", "#/spray", "Spray"), tab("team", "#/team", "Team"),
@@ -1465,7 +1469,12 @@
     }
     // Live games first, then the rest grouped by season / tournament like the app (newest group first,
     // games with no season last). Without any seasons it's one plain list.
-    const ordered = [...live, ...state.games.filter(g => g.isFinal)];
+    // Live games always get their scoreboard card on top; the list is the season picked in the header.
+    const ordered = [...live.filter(inEvent), ...state.games.filter(g => g.isFinal && inEvent(g))];
+    if (!ordered.length) {
+      return [live.map(liveCard), h("h2", { class: "section" }, currentEventLabel() || "Games"),
+        h("div", { class: "card empty" }, "No games in this season yet. Tap the season at the top right to pick another.")];
+    }
     const events = eventsOf(ordered);
     if (!events.length) return [live.map(liveCard), h("h2", { class: "section" }, "Games"), list(ordered)];
     const groups = events.map(e => ({ title: e.name, tournament: e.kind === "tournament", games: ordered.filter(g => eventKey(g) === e.key) }));
@@ -1569,13 +1578,12 @@
     return [
       h("h2", { class: "section" }, currentEventLabel() || "Season Stats",
         h("span", { class: "rec" }, `${record(games)} · ${finals} game${finals === 1 ? "" : "s"}`)),
-      h("div", { class: "controls" },
-        eventSelect(),
+      teams.length > 1 ? h("div", { class: "controls" },
         teams.length > 1
           ? h("select", { class: "control", "aria-label": "Team", onchange: e => { state.statsTeam = e.target.value; render(); } },
               h("option", { value: "" }, "All teams"),
               teams.map(t => { const o = h("option", { value: t }, t); if (t === team) o.selected = true; return o; }))
-          : null),
+          : null) : null,
       rows.length
         ? statsTable(columns, [...rows, total], {
             sort: state.statsSort,
@@ -1603,7 +1611,6 @@
     return [
       h("h2", { class: "section" }, "Spray Charts"),
       h("div", { class: "controls" },
-        eventSelect(),
         h("select", { class: "control", "aria-label": "Player", onchange: e => { state.sprayPlayer = e.target.value; render(); } },
           option("", "Whole team", !player),
           players.map(p => option(p, `${p} (${all.filter(s => s.name === p).length})`, p === player))),
@@ -1663,14 +1670,10 @@
       .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
     const years = [...new Set(pool.map(yearOf).filter(Boolean))];
-    const year = years.includes(state.myYear) ? state.myYear : "";
+    const event = currentEvent();   // the season picked in the header (a year only matters for "All seasons")
+    const year = !event && years.includes(state.myYear) ? state.myYear : "";
     const inYear = pool.filter(g => !year || yearOf(g) === year);
     const events = eventsOf(inYear);
-    const myNewest = newestSeason(inYear);
-    const event = state.myEvent == null ? myNewest
-      : state.myEvent === "all" ? ""
-      : state.myEvent === "none" ? (inYear.some(g => !g.event) ? "none" : myNewest)
-      : events.some(e => e.key === state.myEvent) ? state.myEvent : myNewest;
     const games = inYear.filter(g => !event || eventKey(g) === event);
     const lines = games.map(myLine);
     const total = lines.length ? sumLines("Total", lines) : null;
@@ -1681,15 +1684,8 @@
       teamCount > 1 ? h("select", { class: "control", "aria-label": "Teams",
         onchange: e => { state.myScope = e.target.value; state.myAll = null; render(); } },
         option("", `${state.team?.name || "This team"} only`, !all), option("all", "All my teams", all)) : null,
-      years.length > 1 ? h("select", { class: "control", "aria-label": "Year", onchange: e => pick("myYear", e.target.value) },
-        option("", "All years", !year), years.map(y => option(y, y, y === year))) : null,
-      events.length ? h("select", { class: "control", "aria-label": "Season or tournament", onchange: e => pick("myEvent", e.target.value || "all") },
-        option("", "All seasons", !event),
-        events.some(e => e.kind !== "tournament") ? h("optgroup", { label: "Seasons" },
-          events.filter(e => e.kind !== "tournament").map(e => option(e.key, e.name, e.key === event))) : null,
-        events.some(e => e.kind === "tournament") ? h("optgroup", { label: "Tournaments" },
-          events.filter(e => e.kind === "tournament").map(e => option(e.key, e.name, e.key === event))) : null,
-        inYear.some(g => !g.event) ? option("none", "No season", event === "none") : null) : null);
+      !event && years.length > 1 ? h("select", { class: "control", "aria-label": "Year", onchange: e => pick("myYear", e.target.value) },
+        option("", "All years", !year), years.map(y => option(y, y, y === year))) : null);
 
     const heading = h("h2", { class: "section" }, "My Stats",
       h("span", { class: "rec" }, [state.profile?.name, total ? `${total.g} game${total.g === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ")));
@@ -1699,6 +1695,11 @@
         h("p", null, "No stats for you yet."),
         h("p", { class: "small" }, "Your scorer links your account to your games in the Slow Pitch Book app (Teams → your team → Players → Link). ",
           `Games where you're listed as “${state.profile?.name || "your name"}” count too.`))];
+    }
+    if (!games.length) {
+      return [heading, controls, h("div", { class: "card empty" },
+        h("p", null, `No games for you in ${currentEventLabel() || "this season"}.`),
+        h("p", { class: "small" }, "Tap the season at the top right to see another one, or All seasons."))];
     }
 
     const rateTile = (label, value) => h("div", { class: "card my-rate" }, h("b", null, rate(value)), h("span", null, label));
