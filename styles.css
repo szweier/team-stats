@@ -432,7 +432,7 @@ details.fold.past summary { margin-bottom: 10px; }
 .roster-row:first-child { border-top: 0; }
 .rname { flex: 1; font: 700 16px/1.3 var(--round); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pill.mgr { background: var(--accent); color: #fff; }
-.pill.sched { background: var(--card-2); color: var(--accent); border: 1px solid var(--accent); }
+.pill.role { background: var(--card-2); color: var(--accent); border: 1px solid var(--accent); }
 .you { color: var(--muted); font: 600 13px/1 var(--round); }
 .radmin { display: flex; gap: 10px; align-items: center; margin-left: auto; }
 .role-select {

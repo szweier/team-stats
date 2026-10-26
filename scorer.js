@@ -263,8 +263,8 @@ window.StatScorer = function (ctx) {
   // Demo: add &keeper to the address to see what a Scorekeeper sees.
   const demoKeeper = () => DEMO && new URLSearchParams(location.search).has("keeper");
   /// Managers (and the app's scorers) set lineups and start any game; Scorekeepers only keep the book.
-  const isManagerHere = () => (DEMO ? !demoKeeper() : ctx.isManager() || (state.team?.editors || []).includes(me()));
-  const isScorerHere = () => DEMO || ctx.isManager() ||
+  const isManagerHere = () => (DEMO ? !demoKeeper() : ctx.isLead() || (state.team?.editors || []).includes(me()));
+  const isScorerHere = () => DEMO || ctx.isLead() ||
     ((state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me()));
 
   // ---------- Games tab: scoring list ----------
@@ -316,7 +316,7 @@ window.StatScorer = function (ctx) {
               : manager ? h("a", { class: "btn small ghost", href: "#/" }, "Set Lineup") : h("span", { class: "muted small" }, "Waiting for a manager"));
         }))] : null,
       storageError ? h("div", { class: "notice" }, `${storageError} Scoring on this browser is turned off so nothing gets lost; try Safari or Chrome, not a private window.`) : null,
-      !can ? h("div", { class: "card empty" }, "Only managers and scorers can keep score. A manager can make you a Scorer on the Team tab.") : null,
+      !can ? h("div", { class: "card empty" }, "Only admins, managers and scorekeepers can keep score. An admin can give you a role on the Team tab.") : null,
       mine.length ? [h("h2", { class: "section" }, "On this phone"),
         h("div", { class: "card games", style: "gap:0;overflow:hidden" }, mine.map(r => {
           const g = r.game, s = E.state(g), sync = syncText(r);

@@ -399,10 +399,14 @@
   }
 
   const me = () => (DEMO ? "demo-me" : session?.uid);
+  /// Admins: full control (stored as `managers`, so existing teams and the iOS app carry on unchanged).
   const isManager = () => DEMO || (state.team?.managers || []).includes(me());
+  const isAdmin = isManager;
+  /// Managers (`leads`): the schedule, lineups and keeping score. Admins can do all of that too.
+  const isLead = () => isAdmin() || ((state.team?.leads || []).includes(me()) && (state.team?.members || []).includes(me()));
   /// Managers, plus members a manager has let add and edit the schedule.
   const isScorer = () => (state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me());
-  const canSchedule = () => isManager() || (state.team?.schedulers || []).includes(me());
+  const canSchedule = () => isLead() || (state.team?.schedulers || []).includes(me());
 
   async function loadProfile() {
     if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
@@ -485,7 +489,8 @@
     let team, games, schedule, members, links = [], settings = null;
     if (DEMO) {
       const d = await loadDemo();
-      team = { name: d.board.name, members: d.members.map(m => m.uid), managers: ["demo-me"], editors: [] };
+      team = { name: d.board.name, members: d.members.map(m => m.uid), managers: ["demo-me"], leads: ["demo-alex"],
+        scorers: ["demo-blake"], schedulers: ["demo-casey"], editors: [] };
       games = d.games;
       schedule = state.schedule.length ? state.schedule : d.schedule.map(x => ({ ...x }));
       members = d.members;
@@ -559,16 +564,18 @@
 
   // Team management (managers)
 
-  async function setRoles(members, managers, schedulers = state.team.schedulers || [], scorers = state.team.scorers || []) {
+  /// Sets everyone's roles: managers = Admins, leads = Managers.
+  async function setRoles(members, managers, schedulers = state.team.schedulers || [], scorers = state.team.scorers || [], leads = state.team.leads || []) {
     if (DEMO) throw new Error("That isn't available in the demo.");
-    await setDoc(`teams/${state.key}`, { name: state.team.name, members, managers, schedulers, scorers, updatedAt: now() },
-      { mask: ["name", "members", "managers", "schedulers", "scorers", "updatedAt"], exists: true });
+    await setDoc(`teams/${state.key}`, { name: state.team.name, members, managers, leads, schedulers, scorers, updatedAt: now() },
+      { mask: ["name", "members", "managers", "leads", "schedulers", "scorers", "updatedAt"], exists: true });
   }
 
   async function removeMember(uid) {
     if (DEMO) throw new Error("That isn't available in the demo.");
     await setRoles((state.team.members || []).filter(x => x !== uid), (state.team.managers || []).filter(x => x !== uid),
-      (state.team.schedulers || []).filter(x => x !== uid), (state.team.scorers || []).filter(x => x !== uid));
+      (state.team.schedulers || []).filter(x => x !== uid), (state.team.scorers || []).filter(x => x !== uid),
+      (state.team.leads || []).filter(x => x !== uid));
     await deleteDoc(`teams/${state.key}/members/${uid}`).catch(() => {});
   }
 
@@ -590,7 +597,7 @@
 
   async function leaveTeam() {
     await deleteDoc(`teams/${state.key}/members/${me()}`).catch(() => {});
-    await changeLists(state.key, { remove: { members: [me()], managers: [me()], schedulers: [me()], scorers: [me()] } });
+    await changeLists(state.key, { remove: { members: [me()], managers: [me()], leads: [me()], schedulers: [me()], scorers: [me()] } });
     await dropFromMyTeams(state.key);
   }
 
@@ -898,11 +905,11 @@
   function claimView() {
     app.replaceChildren(panel(
       h("h1", null, "Set up your team's website"),
-      h("p", null, "You'll become this team's manager: you can invite teammates, add the schedule, and everyone you invite can see the stats your app publishes."),
+      h("p", null, "You'll become this team's admin: you can invite teammates, add the schedule, and everyone you invite can see the stats your app publishes."),
       h("button", { class: "btn", type: "button", onclick: action(async () => {
         const id = await claimWithScorerCode(CLAIM);
         location.replace(`${SITE}?t=${id}#/team`);
-      }, { after: () => {} }) }, "Become Manager"),
+      }, { after: () => {} }) }, "Become Admin"),
       h("p", { class: "or" }, h("a", { href: SITE }, "Not now"))));
   }
 
@@ -995,7 +1002,7 @@
   /// The batting order (everyone), Set Lineup (managers) and Keep Score (managers and scorekeepers, on the day).
   function lineupBlock(g) {
     const lineup = g.lineup || [];
-    const runsTeam = isManager();
+    const runsTeam = isLead();
     const canKeep = scorer?.isScorerHere() && lineup.length && g.date <= todayISO();
     const buttons = [
       runsTeam ? h("button", { class: "btn small ghost", type: "button", onclick: () => { state.editingLineup = g.id; render(); } },
@@ -1255,21 +1262,28 @@
         h("button", { class: "btn", type: "submit" }, g ? "Save" : "Add Game")));
   }
 
-  /// Player / Scheduler / Manager for one teammate (managers only).
-  function roleSelect(uid, current, managers, schedulers, scorers) {
+  const ROLES = [["player", "Player"], ["scheduler", "Scheduler"], ["scorer", "Scorekeeper"], ["lead", "Manager"], ["admin", "Admin"]];
+  function roleOf(uid) {
+    const t = state.team || {};
+    return (t.managers || []).includes(uid) ? "admin" : (t.leads || []).includes(uid) ? "lead"
+      : (t.scorers || []).includes(uid) ? "scorer" : (t.schedulers || []).includes(uid) ? "scheduler" : "player";
+  }
+
+  /// Player / Scheduler / Scorekeeper / Manager / Admin for one teammate (admins only). One role each.
+  function roleSelect(uid, current) {
     const sel = h("select", { class: "role-select", "aria-label": "Role", onchange: e => {
       const role = e.target.value;
-      const mgrs = [...managers].filter(x => x !== uid), scheds = [...schedulers].filter(x => x !== uid), scrs = [...scorers].filter(x => x !== uid);
-      if (role === "manager") mgrs.push(uid);
-      if (role === "scheduler") scheds.push(uid);
-      if (role === "scorer") scrs.push(uid);
+      const t = state.team;
+      const without = f => (t[f] || []).filter(x => x !== uid);
+      const lists = { managers: without("managers"), leads: without("leads"), schedulers: without("schedulers"), scorers: without("scorers") };
+      ({ admin: lists.managers, lead: lists.leads, scheduler: lists.schedulers, scorer: lists.scorers })[role]?.push(uid);
       sel.disabled = true;
-      setRoles(state.team.members, mgrs, scheds, scrs).then(refreshNow, err => {
+      setRoles(t.members, lists.managers, lists.schedulers, lists.scorers, lists.leads).then(refreshNow, err => {
         sel.value = current;   // didn't save: show the role they still have
         sel.disabled = false;
         alert(err.message || "Something went wrong. Try again.");
       });
-    } }, [["player", "Player"], ["scheduler", "Scheduler"], ["scorer", "Scorekeeper"], ["manager", "Manager"]].map(([v, t]) => h("option", { value: v }, t)));
+    } }, ROLES.map(([v, t]) => h("option", { value: v }, t)));
     sel.value = current;
     return sel;
   }
@@ -1347,11 +1361,9 @@
 
   function teamView() {
     const manager = isManager();
-    const managers = new Set(state.team?.managers || []);
-    const schedulers = new Set(state.team?.schedulers || []);
-    const scorers = new Set(state.team?.scorers || []);
     const invite = state.settings?.inviteCode ? `${SITE}?join=${state.settings.inviteCode}` : "";
-    const sorted = [...state.members].sort((a, b) => Number(managers.has(b.uid)) - Number(managers.has(a.uid)) || (a.name || "").localeCompare(b.name || ""));
+    const rank = uid => ["admin", "lead", "scorer", "scheduler", "player"].indexOf(roleOf(uid));
+    const sorted = [...state.members].sort((a, b) => rank(a.uid) - rank(b.uid) || (a.name || "").localeCompare(b.name || ""));
     return [
       manager && invite ? [
         h("h2", { class: "section" }, "Invite teammates"),
@@ -1366,19 +1378,17 @@
       h("h2", { class: "section" }, `Players (${state.members.length})`),
       h("div", { class: "card roster" }, sorted.map(m => h("div", { class: "roster-row" },
         h("div", { class: "rname" }, m.name || "Player",
-          managers.has(m.uid) ? h("span", { class: "pill mgr" }, "Manager")
-            : scorers.has(m.uid) ? h("span", { class: "pill sched" }, "Scorekeeper")
-            : schedulers.has(m.uid) ? h("span", { class: "pill sched" }, "Scheduler") : null,
+          roleOf(m.uid) === "player" ? null
+            : h("span", { class: `pill ${roleOf(m.uid) === "admin" ? "mgr" : "role"}` }, ROLES.find(r => r[0] === roleOf(m.uid))[1]),
           m.uid === me() ? h("span", { class: "you" }, "You") : null),
         manager && m.uid !== me() ? h("div", { class: "radmin" },
-          roleSelect(m.uid, managers.has(m.uid) ? "manager" : scorers.has(m.uid) ? "scorer" : schedulers.has(m.uid) ? "scheduler" : "player",
-            managers, schedulers, scorers),
+          roleSelect(m.uid, roleOf(m.uid)),
           h("button", { class: "link-btn danger", type: "button", onclick: e => {
             if (confirm(`Remove ${m.name || "this player"} from ${state.team.name}?`)) action(() => removeMember(m.uid), { after: refreshNow })(e);
           } }, "Remove")) : null,
         manager ? linkStatus(m) : null))),
       manager && state.linking ? linkPanel(state.members.find(m => m.uid === state.linking)) : null,
-      manager ? h("div", { class: "legend" }, "Link each player to the name they've been scored under (in the app or here): their stats then follow their account, under the name they chose. Managers run the team: players, lineups, the schedule and keeping score. Scorekeepers keep score from the lineup a manager set (they can make subs and add late arrivals). Schedulers add, edit and delete games on the schedule. Players see the schedule and stats and answer for themselves.") : null,
+      manager ? h("div", { class: "legend" }, "Link each player to the name they've been scored under (in the app or here): their stats then follow their account, under the name they chose. Admins have full control: players, roles, invites, links and the team. Managers set the schedule, choose lineups and keep score. Scorekeepers keep score from the lineup a manager set (they can make subs and add late arrivals). Schedulers add, edit and delete games on the schedule. Players see the schedule and stats and answer for themselves.") : null,
       manager && state.settings?.scorerCode ? [
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
@@ -1395,7 +1405,7 @@
         } }, "Rename Team") : null,
         DEMO ? null : h("button", { class: "btn small ghost", type: "button", onclick: e => {
           if (manager && (state.team.managers || []).length <= 1) {
-            alert("You're the only manager. Make someone else a manager first, or delete the team.");
+            alert("You're the only admin. Make someone else an admin first, or delete the team.");
             return;
           }
           if (confirm(`Leave ${state.team.name}? You'll need a new invite to come back.`)) {
@@ -1800,7 +1810,7 @@
   // ---------- Keeping score (scorer.js, on engine.js) ----------
 
   const scorer = window.StatScorer && window.StatEngine ? window.StatScorer({
-    h, E: window.StatEngine, fs, DOCS, enc, fieldsOf, me, state, render, route, action, refreshNow, isManager, listDocs, saveLineup,
+    h, E: window.StatEngine, fs, DOCS, enc, fieldsOf, me, state, render, route, action, refreshNow, isManager, isLead, listDocs, saveLineup,
     Forbidden, fieldSVG, COLORS, ordinal, fmtDate, todayISO, DEMO, eventsOf, storage, statsTable, BATTING, derive, lineScore,
   }) : null;
 
