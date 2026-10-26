@@ -151,14 +151,15 @@
     return { ...l, tb, k: l.kl + l.ks + l.kf, avg, obp, slg, ops: obp + slg };
   }
 
-  /// Season totals by player name, like the app's Season screen (a game counts if they batted or scored).
+  /// Season totals by player, like the app's Season screen (a game counts if they batted or scored).
+  /// Players the app linked to a teammate's account count as one person whatever name they were scored under.
   function seasonLines(games) {
     const by = new Map();
     for (const g of games) {
       for (const l of g.lines || []) {
         if (!(l.pa > 0 || l.r > 0 || l.crr > 0)) continue;
         const name = String(l.name || "").trim();
-        const key = name.toLowerCase();
+        const key = l.member ? `m:${l.member}` : `n:${name.toLowerCase()}`;
         const s = by.get(key) || Object.fromEntries([["name", name], ["g", 0], ...FIELDS.map(f => [f, 0])]);
         s.g += 1;
         for (const f of FIELDS) s[f] += l[f] || 0;
@@ -166,6 +167,13 @@
       }
     }
     return [...by.values()].map(derive);
+  }
+
+  /// Linked players show the name on their account now, so a rename never needs the app.
+  function withMemberNames(games, members) {
+    const names = new Map(members.map(m => [m.uid, m.name]));
+    const named = x => (x.member && names.get(x.member) ? { ...x, name: names.get(x.member) } : x);
+    return games.map(g => ({ ...g, lines: (g.lines || []).map(named), spray: (g.spray || []).map(named) }));
   }
 
   function record(games) {
@@ -451,6 +459,7 @@
       // Keep "My teams" in step with the team's current name.
       if (state.profile.teams[teamId] !== team.name) addToMyTeams(teamId, team.name).catch(() => {});
     }
+    games = withMemberNames(games, members);
     games.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     schedule.sort((a, b) => `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`));
     const signature = JSON.stringify([team, games, schedule, members, settings]);
