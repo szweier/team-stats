@@ -678,3 +678,12 @@ details.fold.past summary { margin-bottom: 10px; }
 .theme-pickers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .theme-pickers label { display: grid; gap: 6px; font: 700 13px/1.2 var(--round); color: var(--muted); }
 .theme-pickers input[type=color] { width: 100%; height: 44px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 3px; cursor: pointer; }
+
+/* Coin toss: who bats first (when a game starts) */
+.side-pick { display: grid; gap: 6px; }
+.side-pick .seg { margin-left: 0; width: 100%; }
+.seg-btn.side { flex: 1; display: grid; gap: 3px; padding: 11px 8px; }
+.seg-btn.side small { font: 700 11px/1 var(--round); letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.75; }
+.seg-btn.side.on { background: var(--accent); color: var(--on-accent); }
+.game-row.toss { flex-wrap: wrap; }
+.game-row.toss .side-pick { flex: 1 1 100%; }

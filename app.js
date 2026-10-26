@@ -33,7 +33,7 @@
     team: null,           // { name, members, managers, editors }
     board: null,          // { name } (for the stats views)
     games: [],            // PublishedGame objects, newest first
-    schedule: [],         // [{ id, date, time, opponent, isHome, location, notes, availability }]
+    schedule: [],         // [{ id, date, time, opponent, location, notes, availability }] (home/away is picked when the game starts)
     members: [],          // [{ uid, name }]
     settings: null,       // { scorerCode, inviteCode } (managers)
     signature: "",
@@ -41,6 +41,7 @@
     books: {},
     editing: null,        // schedule game being edited: id, "new", or null
     editingLineup: null,  // schedule game whose batting order a manager is setting
+    tossFor: null,        // Schedule: the game whose coin toss is being asked before Keep Score
     themeDraft: null,     // Team tab: colors an admin is previewing (not saved yet)
     linking: null,        // member a manager is linking to scorebook names (Team tab)
     links: [],            // scorebook name → member links (teams/{t}/links)
@@ -617,7 +618,7 @@
       else state.schedule.push({ id: newCode(), ...game, availability: {} });
       return;
     }
-    const fields = ["date", "time", "opponent", "isHome", "location", "notes", "lat", "lng", "updatedAt"];
+    const fields = ["date", "time", "opponent", "location", "notes", "lat", "lng", "updatedAt"];
     await setDoc(`teams/${state.key}/schedule/${id || newCode()}`, { ...game, updatedAt: now() }, { mask: fields });
   }
 
@@ -1124,17 +1125,26 @@
     const buttons = [
       runsTeam ? h("button", { class: "btn small ghost", type: "button", onclick: () => { state.editingLineup = g.id; render(); } },
         lineup.length ? "Edit Lineup" : "Set Lineup") : null,
-      canKeep ? h("button", { class: "btn small", type: "button", onclick: action(async () => {
-        const id = await scorer.startFromSchedule(g);
-        if (id) location.hash = `#/score/${encodeURIComponent(id)}`;
-      }, { after: () => {} }) }, "Keep Score") : null,
+      canKeep && state.tossFor !== g.id ? h("button", { class: "btn small", type: "button", onclick: () => {
+        if (scorer.isStarted(g.id)) { location.hash = `#/score/${encodeURIComponent(g.id)}`; return; }
+        state.tossFor = g.id; render();
+      } }, "Keep Score") : null,
     ].filter(Boolean);
+    // Keep Score asks the coin toss first (a game already being scored just opens).
+    const toss = canKeep && state.tossFor === g.id ? h("div", { class: "card pad toss-card" },
+      scorer.sidePicker(null, home => action(async () => {
+        const id = await scorer.startFromSchedule(g, home);
+        state.tossFor = null;
+        if (id) location.hash = `#/score/${encodeURIComponent(id)}`;
+      }, { after: () => {} })()),
+      h("button", { class: "link-btn", type: "button", onclick: () => { state.tossFor = null; render(); } }, "Cancel")) : null;
     if (!lineup.length && !buttons.length) return null;
     const nameOf = p => (p.member && state.members.find(m => m.uid === p.member)?.name) || p.name;
     return h("div", { class: "lineup-block" },
       lineup.length ? h("details", { class: "who" }, h("summary", null, `Batting order (${lineup.length})`),
         h("ol", { class: "batting-order" }, lineup.map(p => h("li", { class: p.member === me() ? "me" : null }, nameOf(p))))) : null,
-      buttons.length ? h("div", { class: "form-actions start" }, buttons) : null);
+      buttons.length ? h("div", { class: "form-actions start" }, buttons) : null,
+      toss);
   }
 
   function scheduleCard(g, manager, isPast = false) {
@@ -1147,7 +1157,7 @@
     const answered = new Set(Object.keys(answers));
     const noReply = state.members.filter(m => !answered.has(m.uid));
     const d = parseDate(g.date);
-    const opp = g.opponent ? `${g.isHome ? "vs" : "@"} ${g.opponent}` : "Game";
+    const opp = g.opponent ? `vs ${g.opponent}` : "Game";
     const who = (label, list, cls) => list.length ? h("div", { class: "who-group" },
       h("div", { class: `who-head ${cls}` }, `${label} · ${list.length}`),
       h("div", { class: "who-names" }, list.map(p => h("span", { class: "who-name" }, p.name || "Player", p.note ? h("em", null, ` (${p.note})`) : null)))) : null;
@@ -1164,7 +1174,7 @@
               if (confirm(`Delete ${opp} on ${fmtDate(g.date)}? Everyone's answers go with it.`)) action(() => deleteGame(g.id), { after: refreshNow })(e);
             } }, "Delete")) : null,
           h("div", { class: "opp" }, opp),
-          h("div", { class: "meta" }, [g.time ? fmtTime(g.time) : "Time TBD", g.isHome ? "Home" : "Away"].join(" · ")),
+          h("div", { class: "meta" }, g.time ? fmtTime(g.time) : "Time TBD"),
           g.location || typeof g.lat === "number" ? h("div", { class: "loc" },
             h("span", { class: "loc-name" }, "📍 ", g.location || "Pinned on the map"),
             h("span", { class: "loc-links" }, mapLinks(g).map(([label, href]) =>
@@ -1346,13 +1356,10 @@
   }
 
   function gameForm(g) {
-    const f = g || { date: todayISO(), time: "", opponent: "", isHome: false, location: "", notes: "" };
+    const f = g || { date: todayISO(), time: "", opponent: "", location: "", notes: "" };
     const date = h("input", { type: "date", required: true, value: f.date, "aria-label": "Date" });
     const time = h("input", { type: "time", value: f.time || "", "aria-label": "Time" });
     const opponent = h("input", { type: "text", placeholder: "Opponent", maxlength: "80", value: f.opponent || "", "aria-label": "Opponent" });
-    const side = h("select", { "aria-label": "Home or away" },
-      h("option", { value: "away" }, "Away"), h("option", { value: "home" }, "Home"));
-    side.value = f.isHome ? "home" : "away";
     const loc = h("input", { type: "text", placeholder: "Field / park", maxlength: "200", value: f.location || "", "aria-label": "Location" });
     const where = pinField(loc, typeof f.lat === "number" && typeof f.lng === "number" ? { lat: f.lat, lng: f.lng } : null);
     const notes = h("textarea", { placeholder: "Notes (arrival time, jersey color…)", maxlength: "500", rows: "2", "aria-label": "Notes" }, f.notes || "");
@@ -1361,7 +1368,7 @@
       onsubmit: e => {
         e.preventDefault();
         action(async () => {
-          await saveGame(g?.id, { date: date.value, time: time.value, opponent: opponent.value.trim(), isHome: side.value === "home",
+          await saveGame(g?.id, { date: date.value, time: time.value, opponent: opponent.value.trim(),
                                   location: loc.value.trim(), notes: notes.value.trim(),
                                   lat: where.get()?.lat ?? null, lng: where.get()?.lng ?? null });
           state.editing = null;
@@ -1370,7 +1377,7 @@
     },
       h("div", { class: "form-title" }, g ? "Edit game" : "Add a game"),
       h("div", { class: "row2" }, h("label", null, "Date", date), h("label", null, "Time (optional)", time)),
-      h("div", { class: "row2" }, h("label", null, "Opponent", opponent), h("label", null, "Home or away", side)),
+      h("label", null, "Opponent", opponent),
       h("label", null, "Location", loc),
       where.el,
       h("label", null, "Notes", notes),

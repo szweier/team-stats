@@ -386,6 +386,8 @@ window.StatScorer = function (ctx) {
     repaint();
   }
 
+  let tossFor = null;   // the scheduled game whose coin toss is being asked
+
   function listView() {
     const teamId = state.key;
     if (remoteFor !== teamId) { remoteList = null; loadRemoteList(teamId); remoteFor = teamId; }
@@ -408,15 +410,22 @@ window.StatScorer = function (ctx) {
       scheduled.length ? [h("h2", { class: "section" }, "Scheduled games"),
         h("div", { class: "card games", style: "gap:0;overflow:hidden" }, scheduled.map(sg => {
           const has = (sg.lineup || []).length;
-          const label = `${sg.opponent ? `${sg.isHome ? "vs" : "@"} ${sg.opponent}` : "Game"}`;
+          const label = sg.opponent ? `vs ${sg.opponent}` : "Game";
           const sub = [fmtDate(sg.date), has ? `Lineup set (${sg.lineup.length})` : "No lineup yet"].join(" · ");
           if (started.has(sg.id)) return row(`#/score/${encodeURIComponent(sg.id)}`, label, sub + " · started", h("span", { class: "badge LIVE" }, "LIVE"));
+          if (tossFor === sg.id) {
+            return h("div", { class: "game-row toss" },
+              h("div", null, h("div", { class: "who" }, label), h("div", { class: "when" }, sub)),
+              sidePicker(null, home => ctx.action(async () => {
+                const id = await startFromSchedule(sg, home);
+                tossFor = null;
+                if (id) location.hash = `#/score/${encodeURIComponent(id)}`;
+              }, { after: () => {} })()),
+              h("button", { class: "link-btn", type: "button", onclick: () => { tossFor = null; render(); } }, "Cancel"));
+          }
           return h("div", { class: "game-row" }, h("span", { class: "badge T" }, "▶"),
             h("div", null, h("div", { class: "who" }, label), h("div", { class: "when" }, sub)),
-            has ? h("button", { class: "btn small", type: "button", onclick: ctx.action(async () => {
-              const id = await startFromSchedule(sg);
-              if (id) location.hash = `#/score/${encodeURIComponent(id)}`;
-            }, { after: () => {} }) }, "Start")
+            has ? h("button", { class: "btn small", type: "button", onclick: () => { tossFor = sg.id; render(); } }, "Start")
               : manager ? h("a", { class: "btn small ghost", href: "#/" }, "Set Lineup") : h("span", { class: "muted small" }, "Waiting for a manager"));
         }))] : null,
       storageError ? h("div", { class: "notice" }, `${storageError} Scoring on this browser is turned off so nothing gets lost; try Safari or Chrome, not a private window.`) : null,
@@ -538,9 +547,18 @@ window.StatScorer = function (ctx) {
     return head;
   }
 
+  /// "We bat first (Away)" / "We bat second (Home)"; `value` is true (home), false (away) or null (not picked yet).
+  function sidePicker(value, onPick) {
+    return h("div", { class: "side-pick" },
+      h("div", { class: "k" }, "Coin toss: who bats first?"),
+      h("div", { class: "seg" }, [[false, "We bat first", "Away"], [true, "We bat second", "Home"]].map(([home, text, sub]) =>
+        h("button", { type: "button", class: `seg-btn side${value === home ? " on" : ""}`, "aria-pressed": String(value === home), onclick: () => onPick(home) },
+          text, h("small", null, sub)))));
+  }
+
   // ---------- New game ----------
 
-  const draftNew = { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "", pitcher: "" };
+  const draftNew = { opponent: "", isHome: null, date: null, eventKind: "", eventName: "", lineup: null, write: "", pitcher: "" };
 
   function newGameView() {
     if (!isManagerHere()) return listView();
@@ -562,15 +580,9 @@ window.StatScorer = function (ctx) {
       h("a", { class: "back", href: "#/score" }, "‹ Keep Score"),
       h("div", { class: "card game-form" },
         h("div", { class: "form-title" }, "New Game"),
-        h("div", { class: "row2" },
-          h("label", null, "Date", h("input", { type: "date", value: draftNew.date, onchange: e => { draftNew.date = e.target.value; } })),
-          h("label", null, "We're", (() => {
-            const s = h("select", { onchange: e => { draftNew.isHome = e.target.value === "home"; } },
-              h("option", { value: "away" }, "Away (bat first)"), h("option", { value: "home" }, "Home (bat second)"));
-            s.value = draftNew.isHome ? "home" : "away";
-            return s;
-          })())),
+        h("label", null, "Date", h("input", { type: "date", value: draftNew.date, onchange: e => { draftNew.date = e.target.value; } })),
         h("label", null, `${team} vs`, opp),
+        sidePicker(draftNew.isHome, home => { draftNew.isHome = home; render(); }),
         h("div", { class: "row2" },
           h("label", null, "Season or tournament", (() => {
             const s = h("select", { onchange: e => {
@@ -602,7 +614,7 @@ window.StatScorer = function (ctx) {
       })()) : null,
       h("div", { class: "form-actions" },
         h("a", { class: "btn ghost", href: "#/score" }, "Cancel"),
-        h("button", { class: "btn", type: "button", disabled: !on.length || null, onclick: async e => {
+        h("button", { class: "btn", type: "button", disabled: !on.length || draftNew.isHome == null || null, onclick: async e => {
           e.currentTarget.disabled = true;
           const id = await startGame();
           if (id) location.hash = `#/score/${id}`;
@@ -687,7 +699,7 @@ window.StatScorer = function (ctx) {
     const d = lineupDrafts.get(sg.id);
     const on = d.lineup.filter(p => p.on);
     return h("div", { class: "card game-form lineup-editor" },
-      h("div", { class: "form-title" }, `Lineup · ${sg.opponent ? `${sg.isHome ? "vs" : "@"} ${sg.opponent}` : "Game"} · ${fmtDate(sg.date)}`),
+      h("div", { class: "form-title" }, `Lineup · ${sg.opponent ? `vs ${sg.opponent}` : "Game"} · ${fmtDate(sg.date)}`),
       ...lineupBuilder(d),
       h("div", { class: "legend" }, "Checked players bat in this order. Whoever keeps score starts the game with this lineup; they can make subs and add late arrivals during it."),
       h("div", { class: "form-actions" },
@@ -700,7 +712,7 @@ window.StatScorer = function (ctx) {
   }
 
   /// Starts (or reopens) the web-scored game for a scheduled game, with the lineup a manager set.
-  async function startFromSchedule(sg) {
+  async function startFromSchedule(sg, isHome) {
     if (recs.has(sg.id) || (remoteList || []).some(r => r.id === sg.id)) return sg.id;
     if (!DEMO) {
       try { if (await readRemote(state.key, sg.id)) return sg.id; } catch { /* offline: start here */ }
@@ -710,7 +722,7 @@ window.StatScorer = function (ctx) {
       id: sg.id, date: sg.date, team: state.team?.name || "", opponent: sg.opponent || "",
       lineup: (sg.lineup || []).map(p => (p.member ? { id: E.newID(), name: memberName(p.member) || p.name, member: p.member } : { id: E.newID(), name: p.name })),
       bench: [], subs: {}, extras: [], plays: [], courtesySwaps: [], opponentRuns: {},
-      isFinal: false, isHome: !!sg.isHome, isSolo: false,
+      isFinal: false, isHome: !!isHome, isSolo: false,
       event: last ? { kind: last.eventKind || "season", name: last.event } : null,
     };
     if (!g.lineup.length) return null;
@@ -732,7 +744,7 @@ window.StatScorer = function (ctx) {
     const starter = g.lineup.find(p => p.id === draftNew.pitcher);
     if (starter) g.pitching = [{ id: E.newID(), inning: 1, outs: 0, runs: 0, player: { ...starter } }];
     const id = await createGame(g);
-    if (id) Object.assign(draftNew, { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "", pitcher: "" });
+    if (id) Object.assign(draftNew, { opponent: "", isHome: null, date: null, eventKind: "", eventName: "", lineup: null, write: "", pitcher: "" });
     return id;
   }
 
@@ -1848,7 +1860,9 @@ window.StatScorer = function (ctx) {
   const ready = loadRecs().then(() => { syncAll(); });
 
   return {
-    ready, confirmDeleteGame, scoredGame, soloSection, soloGameView, mySoloGames, isScorerHere, isManagerHere, recsForTeam: teamRecs, scheduleLineupEditor, startFromSchedule,
+    ready, confirmDeleteGame, scoredGame, sidePicker,
+    /// Already being scored (here, or on another phone as far as this one knows): no coin toss to ask.
+    isStarted: id => recs.has(id) || (remoteList || []).some(r => r.id === id), soloSection, soloGameView, mySoloGames, isScorerHere, isManagerHere, recsForTeam: teamRecs, scheduleLineupEditor, startFromSchedule,
     view(r) {
       if (!r.id) return listView();
       if (r.id === "new") return newGameView();
