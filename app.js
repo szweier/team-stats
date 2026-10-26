@@ -41,6 +41,7 @@
     books: {},
     editing: null,        // schedule game being edited: id, "new", or null
     editingLineup: null,  // schedule game whose batting order a manager is setting
+    themeDraft: null,     // Team tab: colors an admin is previewing (not saved yet)
     linking: null,        // member a manager is linking to scorebook names (Team tab)
     links: [],            // scorebook name → member links (teams/{t}/links)
     names: [],            // scorebook name → name renames and merges (teams/{t}/names)
@@ -578,6 +579,7 @@
     const signature = JSON.stringify([team, games, schedule, members, links, names, settings]);
     const changed = signature !== state.signature;
     Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, links, names, settings, signature, updated: new Date() });
+    if (!state.themeDraft) showTeamTheme(teamId, team.theme);
     return changed ? "changed" : "same";
   }
 
@@ -961,6 +963,7 @@
   }
 
   function homeView() {
+    applyTheme(null);
     const teams = Object.entries(state.profile.teams || {}).sort((a, b) => a[1].localeCompare(b[1]));
     const code = h("input", { type: "text", placeholder: "ABCD-EFGH-JKLM", required: true, "aria-label": "Scorer code", autocapitalize: "characters" });
     const teamName = h("input", { type: "text", placeholder: "Team name", required: true, maxlength: "80", "aria-label": "Team name", autocapitalize: "words" });
@@ -1473,6 +1476,96 @@
     await deleteDoc(`teams/${state.key}/links/${id}`);
   }
 
+  // ---------- Team colors (admins pick them on the Team tab; everyone on the team sees them) ----------
+
+  const DEFAULT_THEME = { main: "#2e7d2a", highlight: "#d9f23a", board: "#222621" };
+  const THEMES = [
+    ["Field Green", DEFAULT_THEME],
+    ["Navy & Gold", { main: "#1f3a93", highlight: "#f5c518", board: "#14213d" }],
+    ["Red & White", { main: "#c8102e", highlight: "#ffffff", board: "#2b0a0f" }],
+    ["Royal Blue", { main: "#1e5bd7", highlight: "#9fd3ff", board: "#0f1f3d" }],
+    ["Black & Orange", { main: "#e85d10", highlight: "#ff9a3c", board: "#151515" }],
+    ["Purple & Gold", { main: "#5b2a86", highlight: "#fdb927", board: "#24113a" }],
+    ["Maroon & Gold", { main: "#7a1f2b", highlight: "#f2c14e", board: "#2a0d12" }],
+    ["Teal", { main: "#00808f", highlight: "#7ff0e0", board: "#0d2a2e" }],
+    ["Pink", { main: "#d63384", highlight: "#ffd1e8", board: "#2d0f1f" }],
+    ["Columbia Blue", { main: "#2f7fc1", highlight: "#b9d9eb", board: "#13283d" }],
+  ];
+  const goodHex = c => /^#[0-9a-f]{6}$/i.test(c || "");
+  const rgbOf = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+  const hexOf = rgb => "#" + rgb.map(v => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+  const mix = (a, b, t) => { const x = rgbOf(a), y = rgbOf(b); return hexOf(x.map((v, i) => v + (y[i] - v) * t)); };
+  /// Relative luminance (0 black … 1 white).
+  const lum = c => {
+    const [r, g, b] = rgbOf(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  /// Moves `c` toward `to` until its luminance is on the right side of `limit` (keeps text readable).
+  const until = (c, to, ok) => { let x = c; for (let i = 0; i < 12 && !ok(lum(x)); i++) x = mix(x, to, 0.15); return x; };
+  const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+  /// White or near-black text, whichever reads better on `c`.
+  const inkOn = c => (contrast(c, "#ffffff") >= contrast(c, "#121411") ? "#ffffff" : "#121411");
+
+  function themeCSS(t) {
+    const main = goodHex(t.main) ? t.main : DEFAULT_THEME.main;
+    const high = goodHex(t.highlight) ? t.highlight : DEFAULT_THEME.highlight;
+    // The header and scoreboard carry white text, so they stay dark.
+    const board = until(goodHex(t.board) ? t.board : DEFAULT_THEME.board, "#000000", l => l <= 0.06);
+    // Links and buttons need to read on a light page, and on a dark one in dark mode.
+    const light = until(main, "#000000", l => l <= 0.18);
+    const dark = until(main, "#ffffff", l => l >= 0.18);
+    return `:root{--accent:${light};--on-accent:${inkOn(light)};--optic:${high};--board-1:${board};--board-2:${mix(board, "#000000", 0.45)}}`
+      + `@media (prefers-color-scheme: dark){:root{--accent:${dark};--on-accent:${inkOn(dark)}}}`;
+  }
+
+  /// Shows `theme` (null = the default colors) right away.
+  function applyTheme(theme) {
+    let el = document.getElementById("team-theme");
+    if (!el) { el = document.createElement("style"); el.id = "team-theme"; document.head.append(el); }
+    el.textContent = theme ? themeCSS(theme) : "";
+    const bar = document.querySelector('meta[name="theme-color"]');
+    if (bar) bar.content = theme ? getComputedStyle(document.documentElement).getPropertyValue("--board-2").trim() || "#121411" : "#121411";
+  }
+  /// The team's saved colors, remembered on this device so the next visit opens in them.
+  function showTeamTheme(teamId, theme) {
+    applyTheme(theme || null);
+    storage.set(`statbook.theme.${teamId}`, theme ? JSON.stringify(theme) : null);
+  }
+  const sameTheme = (a, b) => ["main", "highlight", "board"].every(k => (a?.[k] || "").toLowerCase() === (b?.[k] || "").toLowerCase());
+
+  async function saveTheme(theme) {
+    if (DEMO) { state.team.theme = theme || undefined; return; }
+    await setDoc(`teams/${state.key}`, { ...(theme ? { theme } : {}), updatedAt: now() }, { mask: ["theme", "updatedAt"], exists: true });
+    state.team.theme = theme || undefined;
+  }
+
+  function themeSection() {
+    const saved = state.team?.theme || null;
+    const draft = state.themeDraft;
+    const shown = draft || saved || DEFAULT_THEME;
+    const preview = t => { state.themeDraft = { ...t }; applyTheme(state.themeDraft); render(); };
+    const picker = (key, label) => h("label", null, label, h("input", { type: "color", value: shown[key], "aria-label": label,
+      // Live while dragging (colors only), then a redraw when they let go.
+      oninput: e => { state.themeDraft = { ...shown, ...(state.themeDraft || {}), [key]: e.target.value }; applyTheme(state.themeDraft); },
+      onchange: e => { state.themeDraft = { ...shown, ...(state.themeDraft || {}), [key]: e.target.value }; applyTheme(state.themeDraft); render(); } }));
+    const changed = draft && !sameTheme(draft, saved || DEFAULT_THEME);
+    return [
+      h("h2", { class: "section" }, "Team colors"),
+      h("div", { class: "card pad" },
+        h("div", { class: "theme-presets" }, THEMES.map(([name, t]) => h("button", { type: "button", class: `theme-preset${sameTheme(t, shown) ? " on" : ""}`,
+          onclick: () => preview(t) }, h("span", { class: "sw" }, [t.board, t.main, t.highlight].map(c => h("i", { style: `background:${c}` }))), name))),
+        h("div", { class: "theme-pickers" }, picker("main", "Main"), picker("highlight", "Highlight"), picker("board", "Header")),
+        h("p", { class: "muted small" }, changed ? "Previewing on this screen only. Save to show these colors to the whole team."
+          : "Main colors buttons and links, Highlight the scoreboard numbers, Header the bar at the top. Colors are adjusted if needed so text stays readable."),
+        h("div", { class: "form-actions start" },
+          h("button", { class: "btn small", type: "button", disabled: !changed || null,
+            onclick: action(async () => { await saveTheme(sameTheme(draft, DEFAULT_THEME) ? null : draft); state.themeDraft = null; showTeamTheme(state.key, state.team.theme); }) }, "Save Colors"),
+          changed ? h("button", { class: "btn small ghost", type: "button", onclick: () => { state.themeDraft = null; applyTheme(saved); render(); } }, "Cancel") : null,
+          saved && !draft ? h("button", { class: "btn small ghost", type: "button",
+            onclick: action(async () => { await saveTheme(null); showTeamTheme(state.key, null); }) }, "Use Default Colors") : null)),
+    ];
+  }
+
   // ---------- Adding people from your other teams (admins, like the app's Add From Another Team) ----------
 
   /// Loads the other teams you're an admin of, with their players' names.
@@ -1607,6 +1700,7 @@
       manager ? otherTeamsSection() : null,
       manager ? h("div", { class: "legend" }, "Link each player to the name they've been scored under (in the app or here): their stats then follow their account, under the name they chose. Admins have full control: players, roles, invites, links and the team. Managers set the schedule, choose lineups and keep score. Scorekeepers keep score from the lineup a manager set (they can make subs and add late arrivals). Schedulers add, edit and delete games on the schedule. Players see the schedule and stats and answer for themselves.") : null,
       manager ? namesSection() : null,
+      manager ? themeSection() : null,
       manager && state.settings?.scorerCode ? [
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
@@ -2028,6 +2122,7 @@
 
   function render() {
     if (!state.key) return homeView();
+    if (state.themeDraft && route().name !== "team") { state.themeDraft = null; applyTheme(state.team?.theme || null); }
     const r = route();
     const y = window.scrollY;
     if (r.name === "score" && scorer?.fullScreen(r)) {
@@ -2101,6 +2196,8 @@
   }
 
   async function start() {
+    // Open in the team's colors from last time while its data loads.
+    if (TEAM && !DEMO) { try { applyTheme(JSON.parse(storage.get(`statbook.theme.${TEAM}`) || "null")); } catch { /* default colors */ } }
     if (!configured()) {
       return app.replaceChildren(panel(h("h1", null, "Team Stats"),
         h("p", null, "This site isn't set up yet: fill in public/config.js with your Firebase project ID and web API key.")));
