@@ -365,7 +365,8 @@
   const me = () => (DEMO ? "demo-me" : session?.uid);
   const isManager = () => DEMO || (state.team?.managers || []).includes(me());
   /// Managers, plus members a manager has let add and edit the schedule.
-  const canSchedule = () => isManager() || (state.team?.schedulers || []).includes(me());
+  const isScorer = () => (state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me());
+  const canSchedule = () => isManager() || isScorer() || (state.team?.schedulers || []).includes(me());
 
   async function loadProfile() {
     if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
@@ -519,16 +520,16 @@
 
   // Team management (managers)
 
-  async function setRoles(members, managers, schedulers = state.team.schedulers || []) {
+  async function setRoles(members, managers, schedulers = state.team.schedulers || [], scorers = state.team.scorers || []) {
     if (DEMO) throw new Error("That isn't available in the demo.");
-    await setDoc(`teams/${state.key}`, { name: state.team.name, members, managers, schedulers, updatedAt: now() },
-      { mask: ["name", "members", "managers", "schedulers", "updatedAt"], exists: true });
+    await setDoc(`teams/${state.key}`, { name: state.team.name, members, managers, schedulers, scorers, updatedAt: now() },
+      { mask: ["name", "members", "managers", "schedulers", "scorers", "updatedAt"], exists: true });
   }
 
   async function removeMember(uid) {
     if (DEMO) throw new Error("That isn't available in the demo.");
     await setRoles((state.team.members || []).filter(x => x !== uid), (state.team.managers || []).filter(x => x !== uid),
-      (state.team.schedulers || []).filter(x => x !== uid));
+      (state.team.schedulers || []).filter(x => x !== uid), (state.team.scorers || []).filter(x => x !== uid));
     await deleteDoc(`teams/${state.key}/members/${uid}`).catch(() => {});
   }
 
@@ -550,14 +551,18 @@
 
   async function leaveTeam() {
     await deleteDoc(`teams/${state.key}/members/${me()}`).catch(() => {});
-    await changeLists(state.key, { remove: { members: [me()], managers: [me()], schedulers: [me()] } });
+    await changeLists(state.key, { remove: { members: [me()], managers: [me()], schedulers: [me()], scorers: [me()] } });
     await dropFromMyTeams(state.key);
   }
 
   /// Deletes the team and everything in it, for everyone.
   async function deleteTeam() {
     const t = state.key;
-    for (const sub of ["schedule", "games", "books", "members"]) {
+    // Website-scored games keep every revision under them; those go first.
+    for (const d of await listDocs(`teams/${t}/scoring`, [["mask.fieldPaths", "rev"]])) {
+      for (const r of await listDocs(`teams/${t}/scoring/${d.id}/revs`, [["mask.fieldPaths", "rev"]])) await deleteDoc(`teams/${t}/scoring/${d.id}/revs/${r.id}`);
+    }
+    for (const sub of ["scoring", "schedule", "games", "books", "members"]) {
       for (const d of await listDocs(`teams/${t}/${sub}`, [["mask.fieldPaths", "updatedAt"]])) await deleteDoc(`teams/${t}/${sub}/${d.id}`);
     }
     if (state.settings?.inviteCode) await deleteDoc(`invites/${state.settings.inviteCode}`).catch(() => {});
@@ -572,6 +577,7 @@
   function route() {
     const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
     if (parts[0] === "game" && parts[1]) return { name: "game", id: decodeURIComponent(parts[1]) };
+    if (parts[0] === "score") return { name: "score", id: parts[1] ? decodeURIComponent(parts[1]) : null };
     if (["games", "stats", "me", "spray", "team"].includes(parts[0])) return { name: parts[0] };
     return { name: "schedule" };
   }
@@ -1177,19 +1183,20 @@
   }
 
   /// Player / Scheduler / Manager for one teammate (managers only).
-  function roleSelect(uid, current, managers, schedulers) {
+  function roleSelect(uid, current, managers, schedulers, scorers) {
     const sel = h("select", { class: "role-select", "aria-label": "Role", onchange: e => {
       const role = e.target.value;
-      const mgrs = [...managers].filter(x => x !== uid), scheds = [...schedulers].filter(x => x !== uid);
+      const mgrs = [...managers].filter(x => x !== uid), scheds = [...schedulers].filter(x => x !== uid), scrs = [...scorers].filter(x => x !== uid);
       if (role === "manager") mgrs.push(uid);
       if (role === "scheduler") scheds.push(uid);
+      if (role === "scorer") scrs.push(uid);
       sel.disabled = true;
-      setRoles(state.team.members, mgrs, scheds).then(refreshNow, err => {
+      setRoles(state.team.members, mgrs, scheds, scrs).then(refreshNow, err => {
         sel.value = current;   // didn't save: show the role they still have
         sel.disabled = false;
         alert(err.message || "Something went wrong. Try again.");
       });
-    } }, ["player", "scheduler", "manager"].map(r => h("option", { value: r }, r[0].toUpperCase() + r.slice(1))));
+    } }, ["player", "scheduler", "scorer", "manager"].map(r => h("option", { value: r }, r[0].toUpperCase() + r.slice(1))));
     sel.value = current;
     return sel;
   }
@@ -1198,6 +1205,7 @@
     const manager = isManager();
     const managers = new Set(state.team?.managers || []);
     const schedulers = new Set(state.team?.schedulers || []);
+    const scorers = new Set(state.team?.scorers || []);
     const invite = state.settings?.inviteCode ? `${SITE}?join=${state.settings.inviteCode}` : "";
     const sorted = [...state.members].sort((a, b) => Number(managers.has(b.uid)) - Number(managers.has(a.uid)) || (a.name || "").localeCompare(b.name || ""));
     return [
@@ -1215,14 +1223,16 @@
       h("div", { class: "card roster" }, sorted.map(m => h("div", { class: "roster-row" },
         h("div", { class: "rname" }, m.name || "Player",
           managers.has(m.uid) ? h("span", { class: "pill mgr" }, "Manager")
+            : scorers.has(m.uid) ? h("span", { class: "pill sched" }, "Scorer")
             : schedulers.has(m.uid) ? h("span", { class: "pill sched" }, "Scheduler") : null,
           m.uid === me() ? h("span", { class: "you" }, "You") : null),
         manager && m.uid !== me() ? h("div", { class: "radmin" },
-          roleSelect(m.uid, managers.has(m.uid) ? "manager" : schedulers.has(m.uid) ? "scheduler" : "player", managers, schedulers),
+          roleSelect(m.uid, managers.has(m.uid) ? "manager" : scorers.has(m.uid) ? "scorer" : schedulers.has(m.uid) ? "scheduler" : "player",
+            managers, schedulers, scorers),
           h("button", { class: "link-btn danger", type: "button", onclick: e => {
             if (confirm(`Remove ${m.name || "this player"} from ${state.team.name}?`)) action(() => removeMember(m.uid), { after: refreshNow })(e);
           } }, "Remove")) : null))),
-      manager ? h("div", { class: "legend" }, "Managers run the team. Schedulers can add, edit and delete games on the schedule, and nothing else. Players see the schedule and stats and answer for themselves.") : null,
+      manager ? h("div", { class: "legend" }, "Managers run the team. Scorers keep score on the website and schedule games. Schedulers add, edit and delete games on the schedule. Players see the schedule and stats and answer for themselves.") : null,
       manager && state.settings?.scorerCode ? [
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
@@ -1280,7 +1290,22 @@
             runners.length ? runners.map(([b, n]) => h("div", null, `${b}: ${n}`)) : "Bases empty"))));
   }
 
+  /// "Keep Score" for managers and scorers, with anything still waiting to upload from this phone.
+  function keepScoreBar() {
+    if (!scorer || !(scorer.isScorerHere() || scorer.recsForTeam(state.key).length)) return null;
+    const waiting = scorer.waiting(state.key);
+    return h("a", { class: "card keep-score", href: "#/score" },
+      h("span", { class: "ks-icon", "aria-hidden": "true" }, "✎"),
+      h("div", null, h("b", null, "Keep Score"), h("div", { class: "muted small" },
+        waiting ? `${waiting} game${waiting === 1 ? "" : "s"} on this phone still to upload` : "Score a game from this phone")),
+      h("span", { class: "chev", "aria-hidden": "true" }, "›"));
+  }
+
   function gamesView() {
+    return [keepScoreBar(), gamesList()];
+  }
+
+  function gamesList() {
     const live = state.games.filter(g => !g.isFinal);
     const row = g => h("a", { class: "game-row", href: `#/game/${encodeURIComponent(g.id)}` },
       h("span", { class: `badge ${g.isFinal ? (g.outcome || "T") : "LIVE"}` }, g.isFinal ? (g.outcome || "T") : "LIVE"),
@@ -1584,9 +1609,14 @@
     if (!state.key) return homeView();
     const r = route();
     const y = window.scrollY;
+    if (r.name === "score" && scorer?.fullScreen(r)) {
+      app.replaceChildren(scorer.view(r));
+      document.title = `Keep Score · ${state.team?.name || "Team"}`;
+      return;
+    }
     const views = { schedule: scheduleView, games: gamesView, stats: statsView, me: myStatsView, spray: sprayView, team: teamView };
-    const content = r.name === "game" ? gameView(r.id) : views[r.name]();
-    app.replaceChildren(...shell(r.name === "game" ? "games" : r.name, content));
+    const content = r.name === "game" ? gameView(r.id) : r.name === "score" ? (scorer ? scorer.view(r) : gamesView()) : views[r.name]();
+    app.replaceChildren(...shell(r.name === "game" || r.name === "score" ? "games" : r.name, content));
     document.querySelector(".tabs a.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
     window.scrollTo(0, y);
     document.title = `${state.team?.name || "Team"} · Team Stats`;
@@ -1609,7 +1639,7 @@
     if (DEMO) return;
     timer = setInterval(async () => {
       // Don't redraw under someone's fingers while they're filling in a form.
-      if (document.visibilityState !== "visible" || !state.key || state.editing) return;
+      if (document.visibilityState !== "visible" || !state.key || state.editing || route().name === "score") return;
       try {
         const result = await load(state.key);
         if (result === false) { stopRefresh(); return notMemberView(); }
@@ -1620,6 +1650,33 @@
   function stopRefresh() { if (timer) clearInterval(timer); timer = null; }
 
   window.addEventListener("hashchange", () => { state.editing = null; render(); window.scrollTo(0, 0); });
+
+  // ---------- Keeping score (scorer.js, on engine.js) ----------
+
+  const scorer = window.StatScorer && window.StatEngine ? window.StatScorer({
+    h, E: window.StatEngine, fs, DOCS, enc, fieldsOf, me, state, render, route, action, refreshNow, isManager, listDocs,
+    Forbidden, fieldSVG, COLORS, ordinal, fmtDate, todayISO, DEMO, eventsOf, storage, statsTable, BATTING, derive, lineScore,
+  }) : null;
+
+  /// No connection when the page opened: show the games saved on this phone so scoring can carry on.
+  function offlineStart() {
+    const local = scorer ? scorer.recsForTeam(TEAM) : [];
+    if (!TEAM || !local.length) return false;
+    const rec = local[0];
+    state.offline = true;
+    state.key = TEAM;
+    state.team = { name: rec.teamName, members: [me()], managers: [], scorers: [me()], editors: [] };
+    state.members = rec.members || [];
+    state.flash = "You're offline. Games saved on this phone are here; they upload when you're back online.";
+    if (route().name !== "score") location.hash = "#/score";
+    render();
+    window.addEventListener("online", () => location.reload(), { once: true });
+    return true;
+  }
+
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("sw.js").catch(() => { /* the site still works without it */ });
+  }
 
   async function start() {
     if (!configured()) {
@@ -1645,9 +1702,12 @@
       const ok = await load(TEAM);
       if (!ok) return notMemberView();
       if (!DEMO && !state.profile.teams[TEAM]) await addToMyTeams(TEAM, state.team.name);
+      await scorer?.ready;
       render();
       startRefresh();
     } catch (e) {
+      // Offline at the field: carry on with the games saved on this phone.
+      if ((e instanceof TypeError || !navigator.onLine) && scorer) { await scorer.ready; if (offlineStart()) return; }
       app.replaceChildren(panel(h("h1", null, "Something went wrong"), h("p", null, e.message || "Couldn't reach the server."),
         h("button", { class: "btn", type: "button", onclick: () => location.reload() }, "Try Again")));
     }
