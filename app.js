@@ -1178,10 +1178,10 @@
       h("a", { class: "back", href: "#/games" }, "‹ All games"),
       h("div", { class: "board game-head" },
         h("div", { class: "status" }, g.isFinal ? status : h("span", { class: "pill live" }, "Live")),
-        h("div", { class: "teams" },
-          h("div", null, h("div", { class: "tn" }, us(g)), h("div", { class: "big" }, g.us)),
-          h("div", { class: "dash" }, "–"),
-          h("div", null, h("div", { class: "tn" }, them(g)), h("div", { class: "big" }, g.them))),
+        // Visitors on the left, home team on the right.
+        h("div", { class: "teams" }, (g.isHome ? [[them(g), g.them], [us(g), g.us]] : [[us(g), g.us], [them(g), g.them]])
+          .map(([name, runs]) => h("div", null, h("div", { class: "tn" }, name), h("div", { class: "big" }, runs)))
+          .flatMap((side, i) => (i ? [h("div", { class: "dash" }, "–"), side] : [side]))),
         h("div", { class: "date" }, `${title(g)} · ${fmtDate(g.date)}`)),
       g.isFinal ? null : liveCard(g),
       h("h2", { class: "section" }, "Line Score"),
