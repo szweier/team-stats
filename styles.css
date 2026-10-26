@@ -608,3 +608,4 @@ details.fold.past summary { margin-bottom: 10px; }
 .link-row[disabled] { opacity: 0.45; cursor: default; }
 .game-form .lineup-check { display: flex; text-transform: none; letter-spacing: 0; font: 700 16px/1.3 var(--round); color: var(--text); }
 .game-form .lineup-check .muted { font-weight: 600; }
+.brand .record .sub.season { display: block; max-width: 34vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

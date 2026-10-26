@@ -47,12 +47,12 @@
     statsTeam: "",
     sprayPlayer: "",
     sprayGame: "",
-    event: storage.get("statbook.event") || "",
+    event: savedEvent(),  // null = the newest season, "all" = every game, or a season / tournament key
     gamePlayer: {},
     myScope: "",          // My Stats: "" = this team, "all" = every team you're on
     myAll: null,          // their games once loaded (or "loading")
     myYear: "",
-    myEvent: "",
+    myEvent: null,        // like `event`: null = the newest season
     flash: "",            // one-time message shown at the top of a page
   };
 
@@ -105,11 +105,32 @@
     return [...seen.values()];
   }
 
-  /// The chosen filter, or "" if it no longer matches any game.
+  /// The newest season (by its most recent game), or "" when no game has one.
+  function newestSeason(games = state.games) {
+    const sorted = [...games].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return eventsOf(sorted).find(e => e.kind !== "tournament")?.key || "";
+  }
+
+  /// What someone picked last time, unless a newer season has started since (then it's the new one).
+  function savedEvent() {
+    try {
+      const v = JSON.parse(storage.get("statbook.event2") || "null");
+      return v && typeof v.pick === "string" ? v : null;
+    } catch { return null; }
+  }
+  function chooseEvent(pick) {
+    state.event = { pick, newest: newestSeason() };
+    storage.set("statbook.event2", JSON.stringify(state.event));
+  }
+
+  /// The season filter in use: the newest season by default; "" means every game.
   function currentEvent() {
-    if (!state.event) return "";
-    if (state.event === "none") return state.games.some(g => !g.event) ? "none" : "";
-    return state.games.some(g => eventKey(g) === state.event) ? state.event : "";
+    const newest = newestSeason();
+    const e = state.event;
+    if (!e || e.newest !== newest) return newest;
+    if (e.pick === "all") return "";
+    if (e.pick === "none") return state.games.some(g => !g.event) ? "none" : newest;
+    return state.games.some(g => eventKey(g) === e.pick) ? e.pick : newest;
   }
 
   const inEvent = g => !currentEvent() || eventKey(g) === currentEvent();
@@ -132,7 +153,7 @@
     const tournaments = events.filter(e => e.kind === "tournament");
     return h("select", {
       class: "control", "aria-label": "Season or tournament",
-      onchange: e => { state.event = e.target.value; storage.set("statbook.event", state.event || null); render(); },
+      onchange: e => { chooseEvent(e.target.value || "all"); render(); },
     },
       option("", "All seasons"),
       seasons.length ? h("optgroup", { label: "Seasons" }, seasons.map(e => option(e.key, e.name))) : null,
@@ -892,7 +913,9 @@
   // ---------- Team pages ----------
 
   function shell(current, content) {
-    const finals = state.games.filter(g => g.isFinal);
+    const shown = state.games.filter(inEvent);
+    const finals = shown.filter(g => g.isFinal);
+    const seasonLabel = currentEventLabel();
     const tab = (name, href, label) => h("a", { href, class: current === name ? "on" : null }, label);
     return [
       h("header", { class: "topbar" }, h("div", { class: "wrap" },
@@ -902,7 +925,7 @@
             h("h1", null, state.team?.name || "Team"),
             h("div", { class: "sub" }, `${state.members.length} player${state.members.length === 1 ? "" : "s"} · ${finals.length} game${finals.length === 1 ? "" : "s"} played`,
               DEMO ? " " : "", DEMO ? h("span", { class: "pill demo" }, "Demo data") : null)),
-          h("div", { class: "record" }, h("b", null, record(state.games)), h("span", { class: "sub" }, "Record"))),
+          h("div", { class: "record" }, h("b", null, record(shown)), h("span", { class: "sub season", title: seasonLabel ? `${seasonLabel} record` : "Record" }, seasonLabel || "Record"))),
         h("nav", { class: "tabs", "aria-label": "Sections" },
           tab("schedule", "#/", "Schedule"), tab("games", "#/games", "Games"), tab("stats", "#/stats", "Stats"),
           tab("me", "#/me", "My Stats"), tab("spray", "#/spray", "Spray"), tab("team", "#/team", "Team"),
@@ -1643,8 +1666,11 @@
     const year = years.includes(state.myYear) ? state.myYear : "";
     const inYear = pool.filter(g => !year || yearOf(g) === year);
     const events = eventsOf(inYear);
-    const event = state.myEvent === "none" ? (inYear.some(g => !g.event) ? "none" : "")
-      : events.some(e => e.key === state.myEvent) ? state.myEvent : "";
+    const myNewest = newestSeason(inYear);
+    const event = state.myEvent == null ? myNewest
+      : state.myEvent === "all" ? ""
+      : state.myEvent === "none" ? (inYear.some(g => !g.event) ? "none" : myNewest)
+      : events.some(e => e.key === state.myEvent) ? state.myEvent : myNewest;
     const games = inYear.filter(g => !event || eventKey(g) === event);
     const lines = games.map(myLine);
     const total = lines.length ? sumLines("Total", lines) : null;
@@ -1657,7 +1683,7 @@
         option("", `${state.team?.name || "This team"} only`, !all), option("all", "All my teams", all)) : null,
       years.length > 1 ? h("select", { class: "control", "aria-label": "Year", onchange: e => pick("myYear", e.target.value) },
         option("", "All years", !year), years.map(y => option(y, y, y === year))) : null,
-      events.length ? h("select", { class: "control", "aria-label": "Season or tournament", onchange: e => pick("myEvent", e.target.value) },
+      events.length ? h("select", { class: "control", "aria-label": "Season or tournament", onchange: e => pick("myEvent", e.target.value || "all") },
         option("", "All seasons", !event),
         events.some(e => e.kind !== "tournament") ? h("optgroup", { label: "Seasons" },
           events.filter(e => e.kind !== "tournament").map(e => option(e.key, e.name, e.key === event))) : null,
