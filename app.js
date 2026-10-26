@@ -220,17 +220,27 @@
     }
     return n;
   }
-  function withMemberNames(games, members, links = [], names = []) {
+  /// { name, member? } → the name to show: the member's own name when linked, else after renames.
+  function nameMapper(members, links = [], names = []) {
     const memberNames = new Map(members.map(m => [m.uid, m.name]));
     const linked = new Map(links.filter(l => memberNames.has(l.uid)).map(l => [l.id, l.uid]));
     const renames = new Map(names.map(r => [r.id, r.to]));
-    const named = x => {
+    return x => {
       const name = x.member ? x.name : renamed(x.name, renames);
       const member = x.member || linked.get(linkKey(name)) || linked.get(linkKey(x.name));
       if (member) return { ...x, member, name: memberNames.get(member) || name, scoredAs: x.name };
       return name !== x.name ? { ...x, name, scoredAs: x.name } : x;
     };
+  }
+  function withMemberNames(games, members, links = [], names = []) {
+    const named = nameMapper(members, links, names);
     return games.map(g => ({ ...g, lines: (g.lines || []).map(named), spray: (g.spray || []).map(named) }));
+  }
+  /// A full scored game with everyone under the names the site shows (for the drawn scorebook).
+  function withBookNames(g) {
+    const named = nameMapper(state.members || [], state.links || [], state.names || []);
+    const fix = ps => (ps || []).map(p => ({ ...named(p), id: p.id }));
+    return { ...g, lineup: fix(g.lineup), bench: fix(g.bench), extras: fix(g.extras) };
   }
 
   function record(games) {
@@ -521,8 +531,9 @@
         listDocs(`teams/${teamId}/games`).then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean)),
         listDocs(`teams/${teamId}/schedule`),
         listDocs(`teams/${teamId}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))),
-        listDocs(`teams/${teamId}/links`).catch(() => []),
-        listDocs(`teams/${teamId}/names`).catch(() => []),
+        // The database keeps these ids decoded ("steve z"), so key them the way they're looked up ("steve%20z").
+        listDocs(`teams/${teamId}/links`).then(ds => ds.map(l => ({ ...l, id: l.name ? linkKey(l.name) : l.id }))).catch(() => []),
+        listDocs(`teams/${teamId}/names`).then(ds => ds.map(r => ({ ...r, id: r.from ? linkKey(r.from) : r.id }))).catch(() => []),
       ]);
       if ((team.managers || []).includes(me())) settings = await getDoc(`teams/${teamId}/private/settings`).catch(() => null);
       // Keep "My teams" in step with the team's current name.
@@ -1723,7 +1734,7 @@
         : h("div", { class: "card empty" }, "No plays yet."),
       scored && scored !== "loading" ? [
         h("h2", { class: "section" }, "Scorebook"),
-        StatBook.panel(scored),
+        StatBook.panel(withBookNames(scored)),
       ] : g.isFinal ? [
         h("h2", { class: "section" }, "Scorebook"),
         h("div", { class: "card book pad" },

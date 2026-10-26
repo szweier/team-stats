@@ -203,7 +203,8 @@ window.StatScorer = function (ctx) {
   function repaint() {
     if (paintScheduled) return;
     paintScheduled = true;
-    requestAnimationFrame(() => { paintScheduled = false; if (ctx.route().name === "score") render(); });
+    // Pages showing saved games: Keep Score, and one-player games (My Stats and their own page).
+    requestAnimationFrame(() => { paintScheduled = false; if (["score", "me", "solo"].includes(ctx.route().name)) render(); });
   }
   const ui = { id: null, step: "main", spot: null, fielder: null, sheet: null, inningCheck: null, breakAfter: null, ending: false };
   function resetTap() { ui.step = "main"; ui.spot = null; ui.fielder = null; }
@@ -526,14 +527,14 @@ window.StatScorer = function (ctx) {
           h("span", null, `${fmtDate(g.date)} · ${g.opponent ? (g.isHome ? "vs " : "@ ") + g.opponent : "Game"}`,
             h("span", { class: "muted small" }, done ? " · already on the website" : ` · ${s.runs}–${E.opponentTotal(g)}${g.isFinal ? "" : " (not finished)"}`))));
     };
-    head.append(
+    head.append(...[
       ours.length ? [h("div", { class: "k" }, `${team} (${ours.length})`), h("div", { class: "card lineup-list" }, ours.map(row))]
         : h("p", null, `None of the games in this file are ${team}'s.`),
       otherTeams.length ? h("p", { class: "muted small" }, `Also in the file: ${otherTeams.join(", ")}. Open that team's page here to import its games.`) : null,
       solo.length ? h("p", { class: "muted small" }, `${solo.length} one-player game${solo.length === 1 ? "" : "s"}: import them from My Stats → Tracked Players.`) : null,
       ours.length ? h("div", { class: "form-actions start" },
         h("button", { class: "btn small", type: "button", disabled: !imp.chosen.size || imp.busy || null, onclick: runImport },
-          imp.busy ? "Importing…" : `Import ${imp.chosen.size} Game${imp.chosen.size === 1 ? "" : "s"}`)) : null);
+          imp.busy ? "Importing…" : `Import ${imp.chosen.size} Game${imp.chosen.size === 1 ? "" : "s"}`)) : null].flat(Infinity).filter(Boolean));
     return head;
   }
 
