@@ -268,6 +268,14 @@ table.stats td.zero { color: var(--muted); opacity: 0.6; }
 table.stats td.rate { font-weight: 700; }
 table.line td.r, table.line th.r { border-left: 1px solid var(--line); font-weight: 800; }
 
+.my-rates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.my-rate { padding: 16px 8px 14px; text-align: center; }
+.my-rate b { display: block; font: 800 32px/1 var(--round); color: var(--accent); font-variant-numeric: tabular-nums; }
+.my-rate span, .my-counts span { display: block; margin-top: 6px; font: 800 11px/1 var(--round); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+.my-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); margin-top: 8px; padding: 6px 4px; }
+.my-counts div { text-align: center; padding: 8px 4px; }
+.my-counts b { display: block; font: 800 20px/1 var(--round); font-variant-numeric: tabular-nums; }
+@media (max-width: 480px) { .my-rate b { font-size: 22px; } }
 .legend { margin-top: 10px; font-size: 13px; color: var(--muted); }
 
 /* ---------- Spray chart ---------- */

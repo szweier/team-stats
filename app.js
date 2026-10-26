@@ -46,6 +46,10 @@
     sprayGame: "",
     event: storage.get("statbook.event") || "",
     gamePlayer: {},
+    myScope: "",          // My Stats: "" = this team, "all" = every team you're on
+    myAll: null,          // their games once loaded (or "loading")
+    myYear: "",
+    myEvent: "",
     flash: "",            // one-time message shown at the top of a page
   };
 
@@ -565,7 +569,7 @@
   function route() {
     const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
     if (parts[0] === "game" && parts[1]) return { name: "game", id: decodeURIComponent(parts[1]) };
-    if (["games", "stats", "spray", "team"].includes(parts[0])) return { name: parts[0] };
+    if (["games", "stats", "me", "spray", "team"].includes(parts[0])) return { name: parts[0] };
     return { name: "schedule" };
   }
 
@@ -879,7 +883,7 @@
           h("div", { class: "record" }, h("b", null, record(state.games)), h("span", { class: "sub" }, "Record"))),
         h("nav", { class: "tabs", "aria-label": "Sections" },
           tab("schedule", "#/", "Schedule"), tab("games", "#/games", "Games"), tab("stats", "#/stats", "Stats"),
-          tab("spray", "#/spray", "Spray"), tab("team", "#/team", "Team"),
+          tab("me", "#/me", "My Stats"), tab("spray", "#/spray", "Spray"), tab("team", "#/team", "Team"),
           h("span", { class: "spacer" }),
           DEMO ? null : h("a", { class: "teams-link", href: SITE }, "My Teams")))),
       h("main", { class: "wrap" }, flashMessage(), content,
@@ -1232,7 +1236,7 @@
             },
           })
         : h("div", { class: "card empty" }, "No stats yet."),
-      h("div", { class: "legend" }, "Tap a column to sort. Players are matched by name across games. AVG = H/AB · OBP = (H+BB)/(AB+BB+SF) · SLG = total bases/AB."),
+      h("div", { class: "legend" }, "Tap a column to sort. Players are matched by account when the scorer has linked them, otherwise by name. AVG = H/AB · OBP = (H+BB)/(AB+BB+SF) · SLG = total bases/AB."),
     ];
   }
 
@@ -1263,13 +1267,142 @@
     ];
   }
 
+  // ---------- My Stats (the signed-in player's own numbers) ----------
+
+  /// Is this stat line (or spray dot) you? Lines the app linked to an account match by account;
+  /// unlinked ones by the name you go by, the same way the app links a typed-in name.
+  function isMine(x) {
+    if (x.member) return x.member === me();
+    const mine = (state.profile?.name || "").trim().toLowerCase();
+    return !!mine && String(x.name || "").trim().toLowerCase() === mine;
+  }
+  const counts = l => l.pa > 0 || l.r > 0 || l.crr > 0;
+
+  /// Published games from every team you're on (for "All my teams").
+  async function loadAllMyGames() {
+    const ids = Object.keys(state.profile.teams || {});
+    const lists = await Promise.all(ids.map(id => id === state.key ? state.games
+      : listDocs(`teams/${id}/games`)
+          .then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean))
+          .catch(() => [])));
+    return lists.flat();
+  }
+
+  /// Your line in one game (summed, in case you were in it under two names).
+  function myLine(g) {
+    const ls = (g.lines || []).filter(l => isMine(l) && counts(l));
+    if (!ls.length) return null;
+    return Object.fromEntries(FIELDS.map(f => [f, ls.reduce((s, l) => s + (l[f] || 0), 0)]));
+  }
+  const sumLines = (name, lines) =>
+    derive(Object.fromEntries([["name", name], ["g", lines.length], ...FIELDS.map(f => [f, lines.reduce((s, l) => s + l[f], 0)])]));
+  const yearOf = g => String(g.date || "").slice(0, 4);
+
+  function myStatsView() {
+    const teamCount = Object.keys(state.profile?.teams || {}).length;
+    const all = state.myScope === "all" && teamCount > 1;
+    if (all && state.myAll == null) {
+      state.myAll = "loading";
+      loadAllMyGames()
+        .then(gs => { state.myAll = gs; })
+        .catch(() => { state.myAll = null; state.myScope = ""; state.flash = "Couldn't load your other teams."; })
+        .finally(() => { if (route().name === "me") render(); });
+    }
+    const loading = all && !Array.isArray(state.myAll);
+    const source = all ? (loading ? [] : state.myAll) : state.games;
+    const pool = source.filter(g => myLine(g))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+    const years = [...new Set(pool.map(yearOf).filter(Boolean))];
+    const year = years.includes(state.myYear) ? state.myYear : "";
+    const inYear = pool.filter(g => !year || yearOf(g) === year);
+    const events = eventsOf(inYear);
+    const event = state.myEvent === "none" ? (inYear.some(g => !g.event) ? "none" : "")
+      : events.some(e => e.key === state.myEvent) ? state.myEvent : "";
+    const games = inYear.filter(g => !event || eventKey(g) === event);
+    const lines = games.map(myLine);
+    const total = lines.length ? sumLines("Total", lines) : null;
+
+    const option = (value, text, selected) => { const o = h("option", { value }, text); if (selected) o.selected = true; return o; };
+    const pick = (key, value) => { state[key] = value; render(); };
+    const controls = h("div", { class: "controls" },
+      teamCount > 1 ? h("select", { class: "control", "aria-label": "Teams",
+        onchange: e => { state.myScope = e.target.value; state.myAll = null; render(); } },
+        option("", `${state.team?.name || "This team"} only`, !all), option("all", "All my teams", all)) : null,
+      years.length > 1 ? h("select", { class: "control", "aria-label": "Year", onchange: e => pick("myYear", e.target.value) },
+        option("", "All years", !year), years.map(y => option(y, y, y === year))) : null,
+      events.length ? h("select", { class: "control", "aria-label": "Season or tournament", onchange: e => pick("myEvent", e.target.value) },
+        option("", "All seasons & tournaments", !event),
+        events.some(e => e.kind !== "tournament") ? h("optgroup", { label: "Seasons" },
+          events.filter(e => e.kind !== "tournament").map(e => option(e.key, e.name, e.key === event))) : null,
+        events.some(e => e.kind === "tournament") ? h("optgroup", { label: "Tournaments" },
+          events.filter(e => e.kind === "tournament").map(e => option(e.key, e.name, e.key === event))) : null,
+        inYear.some(g => !g.event) ? option("none", "No season", event === "none") : null) : null);
+
+    const heading = h("h2", { class: "section" }, "My Stats",
+      h("span", { class: "rec" }, [state.profile?.name, total ? `${total.g} game${total.g === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ")));
+    if (loading) return [heading, controls, h("div", { class: "card empty" }, "Loading your teams…")];
+    if (!pool.length) {
+      return [heading, controls, h("div", { class: "card empty" },
+        h("p", null, "No stats for you yet."),
+        h("p", { class: "small" }, "Your scorer links your account to your games in the Slow Pitch Book app (Teams → your team → Players → Link). ",
+          `Games where you're listed as “${state.profile?.name || "your name"}” count too.`))];
+    }
+
+    const rateTile = (label, value) => h("div", { class: "card my-rate" }, h("b", null, rate(value)), h("span", null, label));
+    const countTile = (label, value) => h("div", null, h("b", null, value), h("span", null, label));
+
+    // Breakdown by season / tournament, or by year when no game has one.
+    const groupOf = events.length ? g => (g.event ? eventLabel({ name: g.event, kind: g.eventKind }) : "No season") : yearOf;
+    const groups = new Map();
+    games.forEach((g, i) => { const k = groupOf(g); groups.set(k, [...(groups.get(k) || []), lines[i]]); });
+    const breakdown = [...groups.entries()].map(([k, ls]) => sumLines(k, ls));
+    if (breakdown.length > 1) breakdown.push(Object.assign(sumLines("Total", lines), { _total: true }));
+    const columns = [{ key: "name", label: events.length ? "Season" : "Year" }, { key: "g", label: "G", title: "Games" }, ...BATTING.slice(1)];
+
+    const here = new Set(state.games.map(g => g.id));
+    const logRows = games.map((g, i) => ({ ...derive(lines[i]), game: g }));
+    const logColumns = [
+      { key: "date", label: "Date", value: r => fmtDate(r.game.date) },
+      { key: "name", label: "Game", value: r => {
+        const text = [title(r.game), all ? r.game.team : ""].filter(Boolean).join(" · ");
+        return here.has(r.game.id) ? h("a", { href: `#/game/${encodeURIComponent(r.game.id)}` }, text) : text;
+      } },
+      ...["ab", "r", "h", "b2", "b3", "hr", "rbi", "bb", "k"].map(k => BATTING.find(c => c.key === k)),
+    ];
+
+    const dots = [];
+    for (const g of games) for (const s of g.spray || []) if (isMine(s)) dots.push(s);
+    const label = [year, event ? (event === "none" ? "No season" : eventLabel(events.find(e => e.key === event))) : "", all ? "All my teams" : state.team?.name]
+      .filter(Boolean).join(" · ");
+
+    return [
+      heading,
+      controls,
+      h("div", { class: "my-rates" },
+        rateTile("AVG", total.avg), rateTile("OBP", total.obp), rateTile("SLG", total.slg), rateTile("OPS", total.ops)),
+      h("div", { class: "card my-counts" },
+        countTile("G", total.g), countTile("PA", total.pa), countTile("AB", total.ab), countTile("H", total.h),
+        countTile("2B", total.b2), countTile("3B", total.b3), countTile("HR", total.hr), countTile("R", total.r),
+        countTile("RBI", total.rbi), countTile("BB", total.bb), countTile("K", total.k), countTile("TB", total.tb)),
+      h("h2", { class: "section" }, events.length ? "By Season & Tournament" : "By Year"),
+      statsTable(columns, breakdown),
+      h("h2", { class: "section" }, "Game Log"),
+      statsTable(logColumns, logRows),
+      h("h2", { class: "section" }, "My Spray Chart"),
+      dots.length ? sprayCard(state.profile?.name || "You", label, dots)
+        : h("div", { class: "card empty" }, "None of your balls in play have a location yet."),
+      h("div", { class: "legend" }, "AVG = H/AB · OBP = (H+BB)/(AB+BB+SF) · SLG = total bases/AB · OPS = OBP + SLG."),
+    ];
+  }
+
   // ---------- Render & refresh ----------
 
   function render() {
     if (!state.key) return homeView();
     const r = route();
     const y = window.scrollY;
-    const views = { schedule: scheduleView, games: gamesView, stats: statsView, spray: sprayView, team: teamView };
+    const views = { schedule: scheduleView, games: gamesView, stats: statsView, me: myStatsView, spray: sprayView, team: teamView };
     const content = r.name === "game" ? gameView(r.id) : views[r.name]();
     app.replaceChildren(...shell(r.name === "game" ? "games" : r.name, content));
     window.scrollTo(0, y);

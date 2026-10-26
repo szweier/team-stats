@@ -217,6 +217,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "pa": 3,
      "ab": 3,
      "r": 1,
@@ -369,6 +370,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": 28.7,
      "distance": 0.595,
      "kind": "hit"
@@ -429,6 +431,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": -3.5,
      "distance": 0.468,
      "kind": "other"
@@ -483,6 +486,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": -14.8,
      "distance": 0.301,
      "kind": "out"
@@ -863,6 +867,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "pa": 6,
      "ab": 5,
      "r": 4,
@@ -1009,6 +1014,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": -1.3,
      "distance": 1.034,
      "kind": "hr"
@@ -1063,6 +1069,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": 15.4,
      "distance": 0.928,
      "kind": "hit"
@@ -1171,6 +1178,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": 23.9,
      "distance": 0.536,
      "kind": "hit"
@@ -1225,6 +1233,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": -34.2,
      "distance": 0.785,
      "kind": "hit"
@@ -1273,6 +1282,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": 32.4,
      "distance": 0.318,
      "kind": "out"
@@ -1810,6 +1820,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "pa": 4,
      "ab": 2,
      "r": 1,
@@ -1962,6 +1973,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": -9.7,
      "distance": 0.635,
      "kind": "out"
@@ -2058,6 +2070,7 @@ window.STATBOOK_DEMO = {
     },
     {
      "name": "Harper",
+     "member": "demo-me",
      "angle": 12.0,
      "distance": 0.68,
      "kind": "hit"
