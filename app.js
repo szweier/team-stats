@@ -209,7 +209,8 @@
   /// Linked players show the name on their account now, so a rename never needs the app.
   /// Links a manager made on the Team tab (scorebook name → member), then shows every linked player under the
   /// name on their account now, so stats follow the person whatever name they were scored under.
-  const linkKey = name => encodeURIComponent(String(name || "").trim().toLowerCase()).replace(/\./g, "%2E");
+  // A "/" stays inside the id (the database would read a plain one as a folder).
+  const linkKey = name => encodeURIComponent(String(name || "").trim().toLowerCase()).replace(/\./g, "%2E").replace(/%2F/g, "%252F");
   /// A scorebook name after an admin's renames and merges ("Mike C" → "Mike Carter"), following chains.
   function renamed(name, renames) {
     let n = String(name || "").trim();
@@ -225,9 +226,11 @@
     const memberNames = new Map(members.map(m => [m.uid, m.name]));
     const linked = new Map(links.filter(l => memberNames.has(l.uid)).map(l => [l.id, l.uid]));
     const renames = new Map(names.map(r => [r.id, r.to]));
+    // Like the app: a name that's exactly a teammate's account name is that teammate.
+    const byName = new Map(members.filter(m => m.name).map(m => [linkKey(m.name), m.uid]));
     return x => {
       const name = x.member ? x.name : renamed(x.name, renames);
-      const member = x.member || linked.get(linkKey(name)) || linked.get(linkKey(x.name));
+      const member = x.member || linked.get(linkKey(name)) || linked.get(linkKey(x.name)) || byName.get(linkKey(name));
       if (member) return { ...x, member, name: memberNames.get(member) || name, scoredAs: x.name };
       return name !== x.name ? { ...x, name, scoredAs: x.name } : x;
     };
@@ -1821,10 +1824,14 @@
   /// Published games from every team you're on (for "All my teams").
   async function loadAllMyGames() {
     const ids = Object.keys(state.profile.teams || {});
+    // Each team's links and renames apply to its own games, like on that team's pages.
     const lists = await Promise.all(ids.map(id => id === state.key ? state.games
-      : listDocs(`teams/${id}/games`)
-          .then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean))
-          .catch(() => [])));
+      : Promise.all([
+          listDocs(`teams/${id}/games`).then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean)),
+          listDocs(`teams/${id}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))).catch(() => []),
+          listDocs(`teams/${id}/links`).then(ds => ds.map(l => ({ ...l, id: l.name ? linkKey(l.name) : l.id }))).catch(() => []),
+          listDocs(`teams/${id}/names`).then(ds => ds.map(r => ({ ...r, id: r.from ? linkKey(r.from) : r.id }))).catch(() => []),
+        ]).then(([games, members, links, names]) => withMemberNames(games, members, links, names)).catch(() => [])));
     return lists.flat();
   }
 
