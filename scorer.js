@@ -130,7 +130,13 @@ window.StatScorer = function (ctx) {
       }
       online = true;
     } catch (e) {
-      if (e instanceof ctx.Forbidden) rec.error = "This account isn't allowed to score for this team anymore. Ask a manager to make you a Scorer.";
+      if (e instanceof ctx.Forbidden) {
+        // Refused: usually because another phone saved a newer revision (only newer ones are accepted).
+        // If so, that's a clash to choose from; otherwise this account really can't score here anymore.
+        const remote = await readRemote(rec.teamId, rec.id).catch(() => null);
+        if (remote && (remote.updateTime !== rec.updateTime || remote.rev >= (rec.pending[0]?.rev ?? Infinity))) rec.conflict = { at: Date.now(), remote };
+        else rec.error = "This account isn't allowed to score for this team anymore. Ask a manager to make you a Scorer.";
+      }
       else if (isConflict(e)) rec.conflict = { at: Date.now() };
       else if (e instanceof TypeError || !navigator.onLine) online = false;   // no connection: try again soon
       else rec.error = e.message || "Upload failed. It will try again.";
@@ -477,16 +483,17 @@ window.StatScorer = function (ctx) {
   async function resolveConflict(rec, keep) {
     const remote = rec.conflict?.remote || await readRemote(rec.teamId, rec.id);
     if (!remote) { rec.conflict = null; rec.updateTime = null; await putRec(rec); syncRec(rec).then(repaint); return; }
-    // Either way nothing is lost: both versions are in the game's revision history online.
-    rec.backups = [...(rec.backups || []), { at: Date.now(), json: JSON.stringify(keep === "mine" ? remote.game : rec.game) }].slice(-5);
+    // Either way nothing is lost: the other phone's version is already in the game's history online, and
+    // this phone's goes in too (then the one picked goes on top of it as the latest).
+    rec.backups = [...(rec.backups || []), { at: Date.now(), json: JSON.stringify(rec.game) }].slice(-5);
+    const mine = { rev: remote.rev + 1, json: JSON.stringify(rec.game), at: Date.now() };
     if (keep === "mine") {
-      const json = JSON.stringify(rec.game);
-      rec.rev = remote.rev + 1;
-      rec.pending = [{ rev: rec.rev, json, at: Date.now() }];
+      rec.rev = mine.rev;
+      rec.pending = [mine];
     } else {
       rec.game = remote.game;
-      rec.rev = remote.rev;
-      rec.pending = [];
+      rec.rev = remote.rev + 2;
+      rec.pending = [mine, { rev: rec.rev, json: JSON.stringify(remote.game), at: Date.now() }];
     }
     rec.syncedRev = remote.rev;
     rec.updateTime = remote.updateTime;

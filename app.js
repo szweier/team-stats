@@ -895,7 +895,9 @@
           tab("me", "#/me", "My Stats"), tab("spray", "#/spray", "Spray"), tab("team", "#/team", "Team"),
           h("span", { class: "spacer" }),
           DEMO ? null : h("a", { class: "teams-link", href: SITE }, "My Teams")))),
-      h("main", { class: "wrap" }, flashMessage(), content,
+      h("main", { class: "wrap" }, flashMessage(),
+        state.offline ? h("div", { class: "notice" }, "You're offline. Games saved on this phone are here; they upload when you're back online.") : null,
+        content,
         h("div", { class: "foot" },
           state.updated ? `Updated ${state.updated.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · ` : "",
           "Refreshes automatically")),
@@ -1667,7 +1669,7 @@
     state.key = TEAM;
     state.team = { name: rec.teamName, members: [me()], managers: [], scorers: [me()], editors: [] };
     state.members = rec.members || [];
-    state.flash = "You're offline. Games saved on this phone are here; they upload when you're back online.";
+
     if (route().name !== "score") location.hash = "#/score";
     render();
     window.addEventListener("online", () => location.reload(), { once: true });
