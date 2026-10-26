@@ -40,6 +40,9 @@
     updated: null,
     books: {},
     editing: null,        // schedule game being edited: id, "new", or null
+    editingLineup: null,  // schedule game whose batting order a manager is setting
+    linking: null,        // member a manager is linking to scorebook names (Team tab)
+    links: [],            // scorebook name → member links (teams/{t}/links)
     statsSort: { col: "avg", dir: -1 },
     statsTeam: "",
     sprayPlayer: "",
@@ -174,9 +177,16 @@
   }
 
   /// Linked players show the name on their account now, so a rename never needs the app.
-  function withMemberNames(games, members) {
+  /// Links a manager made on the Team tab (scorebook name → member), then shows every linked player under the
+  /// name on their account now, so stats follow the person whatever name they were scored under.
+  const linkKey = name => encodeURIComponent(String(name || "").trim().toLowerCase()).replace(/\./g, "%2E");
+  function withMemberNames(games, members, links = []) {
     const names = new Map(members.map(m => [m.uid, m.name]));
-    const named = x => (x.member && names.get(x.member) ? { ...x, name: names.get(x.member) } : x);
+    const linked = new Map(links.filter(l => names.has(l.uid)).map(l => [l.id, l.uid]));
+    const named = x => {
+      const member = x.member || linked.get(linkKey(x.name));
+      return member ? { ...x, member, name: names.get(member) || x.name, scoredAs: x.name } : x;
+    };
     return games.map(g => ({ ...g, lines: (g.lines || []).map(named), spray: (g.spray || []).map(named) }));
   }
 
@@ -366,7 +376,7 @@
   const isManager = () => DEMO || (state.team?.managers || []).includes(me());
   /// Managers, plus members a manager has let add and edit the schedule.
   const isScorer = () => (state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me());
-  const canSchedule = () => isManager() || isScorer() || (state.team?.schedulers || []).includes(me());
+  const canSchedule = () => isManager() || (state.team?.schedulers || []).includes(me());
 
   async function loadProfile() {
     if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
@@ -446,32 +456,35 @@
 
   /// Loads the open team: its record, members, schedule and published games. False if you're not on it.
   async function load(teamId) {
-    let team, games, schedule, members, settings = null;
+    let team, games, schedule, members, links = [], settings = null;
     if (DEMO) {
       const d = await loadDemo();
       team = { name: d.board.name, members: d.members.map(m => m.uid), managers: ["demo-me"], editors: [] };
       games = d.games;
       schedule = state.schedule.length ? state.schedule : d.schedule.map(x => ({ ...x }));
       members = d.members;
+      links = state.links || [];
       settings = { scorerCode: "DEMOCODE2026", inviteCode: "DEMOINVITE26" };
     } else {
       try { team = await getDoc(`teams/${teamId}`); } catch (e) { if (e instanceof Forbidden) return false; throw e; }
       if (!team) return false;
-      [games, schedule, members] = await Promise.all([
+      [games, schedule, members, links] = await Promise.all([
         listDocs(`teams/${teamId}/games`).then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean)),
         listDocs(`teams/${teamId}/schedule`),
         listDocs(`teams/${teamId}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))),
+        listDocs(`teams/${teamId}/links`).catch(() => []),
       ]);
       if ((team.managers || []).includes(me())) settings = await getDoc(`teams/${teamId}/private/settings`).catch(() => null);
       // Keep "My teams" in step with the team's current name.
       if (state.profile.teams[teamId] !== team.name) addToMyTeams(teamId, team.name).catch(() => {});
     }
-    games = withMemberNames(games, members);
+    state.rawGames = games;
+    games = withMemberNames(games, members, links);
     games.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     schedule.sort((a, b) => `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`));
-    const signature = JSON.stringify([team, games, schedule, members, settings]);
+    const signature = JSON.stringify([team, games, schedule, members, links, settings]);
     const changed = signature !== state.signature;
-    Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, settings, signature, updated: new Date() });
+    Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, links, settings, signature, updated: new Date() });
     return changed ? "changed" : "same";
   }
 
@@ -562,7 +575,7 @@
     for (const d of await listDocs(`teams/${t}/scoring`, [["mask.fieldPaths", "rev"]])) {
       for (const r of await listDocs(`teams/${t}/scoring/${d.id}/revs`, [["mask.fieldPaths", "rev"]])) await deleteDoc(`teams/${t}/scoring/${d.id}/revs/${r.id}`);
     }
-    for (const sub of ["scoring", "schedule", "games", "books", "members"]) {
+    for (const sub of ["scoring", "schedule", "games", "books", "members", "links"]) {
       for (const d of await listDocs(`teams/${t}/${sub}`, [["mask.fieldPaths", "updatedAt"]])) await deleteDoc(`teams/${t}/${sub}/${d.id}`);
     }
     if (state.settings?.inviteCode) await deleteDoc(`invites/${state.settings.inviteCode}`).catch(() => {});
@@ -934,13 +947,43 @@
           : null),
       state.editing === "new" ? gameForm(null) : null,
       upcoming.length
-        ? upcoming.map(g => (state.editing === g.id ? gameForm(g) : scheduleCard(g, manager)))
+        ? upcoming.map(g => (state.editing === g.id ? gameForm(g) : state.editingLineup === g.id ? lineupEditor(g) : scheduleCard(g, manager)))
         : (state.editing === "new" ? null : h("div", { class: "card empty" },
             manager ? "No games on the schedule yet. Tap Add Game to add the next one." : "No games on the schedule yet. Your manager adds them here.")),
       past.length ? h("details", { class: "fold past" },
         h("summary", null, `Past games (${past.length})`),
-        past.slice(0, 20).map(g => (state.editing === g.id ? gameForm(g) : scheduleCard(g, manager, true)))) : null,
+        past.slice(0, 20).map(g => (state.editing === g.id ? gameForm(g) : state.editingLineup === g.id ? lineupEditor(g) : scheduleCard(g, manager, true)))) : null,
     ];
+  }
+
+  function lineupEditor(g) {
+    return scorer ? scorer.scheduleLineupEditor(g, saved => { state.editingLineup = null; if (saved) refreshNow(); else render(); }) : null;
+  }
+
+  async function saveLineup(id, lineup) {
+    if (DEMO) { const g = state.schedule.find(x => x.id === id); if (g) g.lineup = lineup; return; }
+    await setDoc(`teams/${state.key}/schedule/${id}`, { lineup, updatedAt: now() }, { mask: ["lineup", "updatedAt"], exists: true });
+  }
+
+  /// The batting order (everyone), Set Lineup (managers) and Keep Score (managers and scorekeepers, on the day).
+  function lineupBlock(g) {
+    const lineup = g.lineup || [];
+    const runsTeam = isManager();
+    const canKeep = scorer?.isScorerHere() && lineup.length && g.date <= todayISO();
+    const buttons = [
+      runsTeam ? h("button", { class: "btn small ghost", type: "button", onclick: () => { state.editingLineup = g.id; render(); } },
+        lineup.length ? "Edit Lineup" : "Set Lineup") : null,
+      canKeep ? h("button", { class: "btn small", type: "button", onclick: action(async () => {
+        const id = await scorer.startFromSchedule(g);
+        if (id) location.hash = `#/score/${encodeURIComponent(id)}`;
+      }, { after: () => {} }) }, "Keep Score") : null,
+    ].filter(Boolean);
+    if (!lineup.length && !buttons.length) return null;
+    const nameOf = p => (p.member && state.members.find(m => m.uid === p.member)?.name) || p.name;
+    return h("div", { class: "lineup-block" },
+      lineup.length ? h("details", { class: "who" }, h("summary", null, `Batting order (${lineup.length})`),
+        h("ol", { class: "batting-order" }, lineup.map(p => h("li", { class: p.member === me() ? "me" : null }, nameOf(p))))) : null,
+      buttons.length ? h("div", { class: "form-actions start" }, buttons) : null);
   }
 
   function scheduleCard(g, manager, isPast = false) {
@@ -990,7 +1033,8 @@
         h("span", { class: "t-none" }, `${noReply.length} no reply`)),
       h("details", { class: "who" }, h("summary", null, "Who's coming"),
         who("In", groups.in, "in"), who("Maybe", groups.maybe, "maybe"), who("Out", groups.out, "out"),
-        who("No reply", noReply, "none")));
+        who("No reply", noReply, "none")),
+      lineupBlock(g));
   }
 
   // ---------- Map pins for scheduled games ----------
@@ -1198,9 +1242,80 @@
         sel.disabled = false;
         alert(err.message || "Something went wrong. Try again.");
       });
-    } }, ["player", "scheduler", "scorer", "manager"].map(r => h("option", { value: r }, r[0].toUpperCase() + r.slice(1))));
+    } }, [["player", "Player"], ["scheduler", "Scheduler"], ["scorer", "Scorekeeper"], ["manager", "Manager"]].map(([v, t]) => h("option", { value: v }, t)));
     sel.value = current;
     return sel;
+  }
+
+  // ---------- Linking players to their stats (like the app's Players → Link) ----------
+
+  /// Everyone in the scorebook: linked members by account, everyone else by name, with games and PA.
+  function scorebookPeople() {
+    const people = new Map();
+    for (const g of state.games) {
+      const seen = new Set();
+      for (const l of g.lines || []) {
+        if (!(l.pa > 0 || l.r > 0 || l.crr > 0)) continue;
+        const key = l.member ? `m:${l.member}` : `n:${String(l.name).trim().toLowerCase()}`;
+        const p = people.get(key) || { key, name: String(l.name).trim(), member: l.member || null, games: 0, pa: 0, gameIDs: new Set() };
+        if (!seen.has(key)) { p.games += 1; seen.add(key); }
+        p.pa += l.pa;
+        p.gameIDs.add(g.id);
+        people.set(key, p);
+      }
+    }
+    return people;
+  }
+
+  function linkStatus(m) {
+    const p = scorebookPeople().get(`m:${m.uid}`);
+    const mine = (state.links || []).filter(l => l.uid === m.uid);
+    return h("div", { class: "link-status" },
+      p ? `Linked · ${p.games} G · ${p.pa} PA` : "No stats linked yet",
+      mine.length ? ` · scored as ${mine.map(l => l.name).join(", ")}` : "",
+      h("button", { class: "link-btn", type: "button", onclick: () => { state.linking = state.linking === m.uid ? null : m.uid; render(); } },
+        state.linking === m.uid ? "Done" : p ? "Link More" : "Link"),
+      mine.length ? h("button", { class: "link-btn danger", type: "button", onclick: e => {
+        if (confirm(`Unlink ${m.name}? Games scored as ${mine.map(l => l.name).join(", ")} go back to counting under that name.`)) {
+          action(async () => { for (const l of mine) await deleteLink(l.id); }, { after: refreshNow })(e);
+        }
+      } }, "Unlink") : null);
+  }
+
+  /// Pick the name(s) this player was scored under; those games then count as theirs.
+  function linkPanel(m) {
+    if (!m) return null;
+    const people = scorebookPeople();
+    const linkedGames = people.get(`m:${m.uid}`)?.gameIDs || new Set();
+    const first = (m.name || "").trim().toLowerCase().split(/\s+/)[0] || "";
+    const free = [...people.values()].filter(p => !p.member).sort((a, b) => a.name.localeCompare(b.name));
+    const likely = free.filter(p => { const n = p.name.toLowerCase(); return first && (n.startsWith(first) || n.startsWith(first[0] + " ")); });
+    const rest = free.filter(p => !likely.includes(p));
+    const row = p => {
+      // Two people in the same game can't be one person.
+      const together = [...p.gameIDs].some(id => linkedGames.has(id));
+      return h("button", { type: "button", class: "link-row", disabled: together || null, onclick: e => {
+        if (confirm(`Link ${p.name} to ${m.name}? Games with ${p.name} will count as ${m.name}'s and show their name.`)) {
+          action(() => saveLink(p.name, m.uid), { after: refreshNow })(e);
+        }
+      } }, h("span", null, p.name), h("span", { class: "muted small" }, together ? `played with ${m.name}` : `${p.games} G · ${p.pa} PA`));
+    };
+    return h("div", { class: "card pad link-panel" },
+      h("b", null, `Link ${m.name}`),
+      h("p", { class: "muted small" }, `Pick the name you've been scoring ${m.name} under. Those games will show ${m.name} and their stats combine, even if they change their name later.`),
+      !free.length ? h("div", { class: "muted" }, "Everyone in the scorebook is already linked.") : null,
+      likely.length ? [h("div", { class: "k" }, "Likely"), likely.map(row)] : null,
+      rest.length ? [h("div", { class: "k" }, likely.length ? "Everyone else" : "Scorebook players"), rest.map(row)] : null,
+      h("div", { class: "form-actions start" }, h("button", { class: "btn small ghost", type: "button", onclick: () => { state.linking = null; render(); } }, "Done")));
+  }
+
+  async function saveLink(name, uid) {
+    if (DEMO) { state.links = [...(state.links || []).filter(l => l.id !== linkKey(name)), { id: linkKey(name), name, uid }]; await load(state.key); return; }
+    await setDoc(`teams/${state.key}/links/${linkKey(name)}`, { name, uid, by: me(), at: now() });
+  }
+  async function deleteLink(id) {
+    if (DEMO) { state.links = (state.links || []).filter(l => l.id !== id); await load(state.key); return; }
+    await deleteDoc(`teams/${state.key}/links/${id}`);
   }
 
   function teamView() {
@@ -1225,7 +1340,7 @@
       h("div", { class: "card roster" }, sorted.map(m => h("div", { class: "roster-row" },
         h("div", { class: "rname" }, m.name || "Player",
           managers.has(m.uid) ? h("span", { class: "pill mgr" }, "Manager")
-            : scorers.has(m.uid) ? h("span", { class: "pill sched" }, "Scorer")
+            : scorers.has(m.uid) ? h("span", { class: "pill sched" }, "Scorekeeper")
             : schedulers.has(m.uid) ? h("span", { class: "pill sched" }, "Scheduler") : null,
           m.uid === me() ? h("span", { class: "you" }, "You") : null),
         manager && m.uid !== me() ? h("div", { class: "radmin" },
@@ -1233,8 +1348,10 @@
             managers, schedulers, scorers),
           h("button", { class: "link-btn danger", type: "button", onclick: e => {
             if (confirm(`Remove ${m.name || "this player"} from ${state.team.name}?`)) action(() => removeMember(m.uid), { after: refreshNow })(e);
-          } }, "Remove")) : null))),
-      manager ? h("div", { class: "legend" }, "Managers run the team. Scorers keep score on the website and schedule games. Schedulers add, edit and delete games on the schedule. Players see the schedule and stats and answer for themselves.") : null,
+          } }, "Remove")) : null,
+        manager ? linkStatus(m) : null))),
+      manager && state.linking ? linkPanel(state.members.find(m => m.uid === state.linking)) : null,
+      manager ? h("div", { class: "legend" }, "Link each player to the name they've been scored under (in the app or here): their stats then follow their account, under the name they chose. Managers run the team: players, lineups, the schedule and keeping score. Scorekeepers keep score from the lineup a manager set (they can make subs and add late arrivals). Schedulers add, edit and delete games on the schedule. Players see the schedule and stats and answer for themselves.") : null,
       manager && state.settings?.scorerCode ? [
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
@@ -1656,7 +1773,7 @@
   // ---------- Keeping score (scorer.js, on engine.js) ----------
 
   const scorer = window.StatScorer && window.StatEngine ? window.StatScorer({
-    h, E: window.StatEngine, fs, DOCS, enc, fieldsOf, me, state, render, route, action, refreshNow, isManager, listDocs,
+    h, E: window.StatEngine, fs, DOCS, enc, fieldsOf, me, state, render, route, action, refreshNow, isManager, listDocs, saveLineup,
     Forbidden, fieldSVG, COLORS, ordinal, fmtDate, todayISO, DEMO, eventsOf, storage, statsTable, BATTING, derive, lineScore,
   }) : null;
 

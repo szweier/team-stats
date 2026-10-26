@@ -194,7 +194,11 @@ window.StatScorer = function (ctx) {
   /// A typed name that matches a teammate's links to their account, like the app.
   function linkedPlayer(rec, name) {
     const n = name.trim();
-    const m = members(rec).find(x => (x.name || "").trim().toLowerCase() === n.toLowerCase());
+    const list = rec ? members(rec) : state.members;
+    const links = (rec && rec.teamId !== state.key ? rec.links : state.links) || [];
+    const key = n.toLowerCase();
+    const viaLink = links.find(l => l.name.trim().toLowerCase() === key);
+    const m = list.find(x => (x.name || "").trim().toLowerCase() === key) || (viaLink && list.find(x => x.uid === viaLink.uid));
     return m ? { id: E.newID(), name: m.name, member: m.uid } : { id: E.newID(), name: n };
   }
   const usName = g => g.team || "Us", themName = g => g.opponent || "Them";
@@ -256,6 +260,10 @@ window.StatScorer = function (ctx) {
 
   // ---------- Who can score ----------
 
+  // Demo: add &keeper to the address to see what a Scorekeeper sees.
+  const demoKeeper = () => DEMO && new URLSearchParams(location.search).has("keeper");
+  /// Managers (and the app's scorers) set lineups and start any game; Scorekeepers only keep the book.
+  const isManagerHere = () => (DEMO ? !demoKeeper() : ctx.isManager() || (state.team?.editors || []).includes(me()));
   const isScorerHere = () => DEMO || ctx.isManager() ||
     ((state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me()));
 
@@ -283,11 +291,30 @@ window.StatScorer = function (ctx) {
     const row = (href, top, sub, badge) => h("a", { class: "game-row", href },
       badge, h("div", null, h("div", { class: "who" }, top), h("div", { class: "when" }, sub)),
       h("span", { class: "chev", "aria-hidden": "true" }, "›"));
-    const can = isScorerHere();
+    const can = isScorerHere(), manager = isManagerHere();
+    // Scheduled games from the past week through today, ready to score once a manager sets the lineup.
+    const today = todayISO();
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+    const started = new Set([...mineIDs, ...(remoteList || []).map(r => r.id)]);
+    const scheduled = can ? state.schedule.filter(g => g.date <= today && g.date >= weekAgo).sort((a, b) => b.date.localeCompare(a.date)) : [];
     return [
       h("a", { class: "back", href: "#/games" }, "‹ Games"),
       h("h2", { class: "section" }, "Keep Score",
-        can ? h("a", { class: "btn small", href: "#/score/new" }, "+ New Game") : null),
+        manager ? h("a", { class: "btn small", href: "#/score/new" }, "+ New Game") : null),
+      scheduled.length ? [h("h2", { class: "section" }, "Scheduled games"),
+        h("div", { class: "card games", style: "gap:0;overflow:hidden" }, scheduled.map(sg => {
+          const has = (sg.lineup || []).length;
+          const label = `${sg.opponent ? `${sg.isHome ? "vs" : "@"} ${sg.opponent}` : "Game"}`;
+          const sub = [fmtDate(sg.date), has ? `Lineup set (${sg.lineup.length})` : "No lineup yet"].join(" · ");
+          if (started.has(sg.id)) return row(`#/score/${encodeURIComponent(sg.id)}`, label, sub + " · started", h("span", { class: "badge LIVE" }, "LIVE"));
+          return h("div", { class: "game-row" }, h("span", { class: "badge T" }, "▶"),
+            h("div", null, h("div", { class: "who" }, label), h("div", { class: "when" }, sub)),
+            has ? h("button", { class: "btn small", type: "button", onclick: ctx.action(async () => {
+              const id = await startFromSchedule(sg);
+              if (id) location.hash = `#/score/${encodeURIComponent(id)}`;
+            }, { after: () => {} }) }, "Start")
+              : manager ? h("a", { class: "btn small ghost", href: "#/" }, "Set Lineup") : h("span", { class: "muted small" }, "Waiting for a manager"));
+        }))] : null,
       storageError ? h("div", { class: "notice" }, `${storageError} Scoring on this browser is turned off so nothing gets lost; try Safari or Chrome, not a private window.`) : null,
       !can ? h("div", { class: "card empty" }, "Only managers and scorers can keep score. A manager can make you a Scorer on the Team tab.") : null,
       mine.length ? [h("h2", { class: "section" }, "On this phone"),
@@ -301,7 +328,8 @@ window.StatScorer = function (ctx) {
         h("div", { class: "card games", style: "gap:0;overflow:hidden" }, others.map(r =>
           row(`#/score/${r.id}`, `@ ${r.opponent || "Game"}`, `${r.scorerName || "Someone"} · ${fmtDate(r.date)}`,
             h("span", { class: "badge LIVE" }, "LIVE"))))] : null,
-      can && !mine.length && !others.length ? h("div", { class: "card empty" }, "No games being scored. Tap New Game to start one.") : null,
+      can && !mine.length && !others.length && !scheduled.length ? h("div", { class: "card empty" },
+        manager ? "No games being scored. Tap New Game, or set a lineup on a scheduled game." : "Nothing to score yet. Once a manager sets the lineup on today's game, it shows here.") : null,
       h("div", { class: "legend" }, "Every tap is saved on this phone first, then uploaded. If you lose signal, keep scoring: it uploads when you're back online. Adding this site to your Home Screen keeps your saved games safest."),
     ];
   }
@@ -311,7 +339,7 @@ window.StatScorer = function (ctx) {
   const draftNew = { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "" };
 
   function newGameView() {
-    if (!isScorerHere()) return listView();
+    if (!isManagerHere()) return listView();
     if (storageError) return listView();
     const team = state.team?.name || "";
     if (!draftNew.date) draftNew.date = todayISO();
@@ -322,25 +350,10 @@ window.StatScorer = function (ctx) {
       const last = [...state.games].filter(g => g.isFinal).sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
       if (last?.event && !draftNew.eventName) { draftNew.eventName = last.event; draftNew.eventKind = last.eventKind || "season"; }
     }
-    const L = draftNew.lineup;
-    const on = L.filter(p => p.on);
-    const move = (i, d) => { const j = i + d; if (j < 0 || j >= L.length) return; [L[i], L[j]] = [L[j], L[i]]; render(); };
-    const pastGames = state.games.filter(g => (g.lines || []).length).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const on = draftNew.lineup.filter(p => p.on);
     const events = eventsOf(state.games);
-    const addWriteIn = () => {
-      const n = draftNew.write.trim();
-      if (!n) return;
-      const m = state.members.find(x => (x.name || "").toLowerCase() === n.toLowerCase());
-      if (m && L.some(p => p.member === m.uid)) { L.find(p => p.member === m.uid).on = true; }
-      else L.push({ id: E.newID(), name: m ? m.name : n, member: m?.uid, on: true });
-      draftNew.write = "";
-      render();
-    };
     const opp = h("input", { type: "text", placeholder: "Opponent", maxlength: "80", value: draftNew.opponent, "aria-label": "Opponent",
       oninput: e => { draftNew.opponent = e.target.value; } });
-    const writeIn = h("input", { type: "text", placeholder: "Add a fill-in or late arrival", maxlength: "80", value: draftNew.write,
-      "aria-label": "Add a player", oninput: e => { draftNew.write = e.target.value; },
-      onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); addWriteIn(); } } });
     return [
       h("a", { class: "back", href: "#/score" }, "‹ Keep Score"),
       h("div", { class: "card game-form" },
@@ -375,35 +388,7 @@ window.StatScorer = function (ctx) {
                 oninput: e => { draftNew.eventName = e.target.value; } }))
             : h("span"))),
 
-      h("h2", { class: "section" }, `Batting order (${on.length})`,
-        pastGames.length ? (() => {
-          const s = h("select", { class: "control", "aria-label": "Use a lineup from another game", onchange: e => {
-            const g = pastGames.find(x => x.id === e.target.value);
-            if (!g) return;
-            // The order players appear in that game (bench and courtesy runners come after the lineup).
-            const names = g.lines.filter(l => l.pa > 0 || l.r > 0).map(l => ({ name: l.name, member: l.member }));
-            const used = new Set();
-            const next = names.map(n => {
-              const m = n.member ? state.members.find(x => x.uid === n.member) : null;
-              used.add(n.member || n.name.toLowerCase());
-              return { id: E.newID(), name: m ? m.name : n.name, member: m ? m.uid : undefined, on: true };
-            });
-            for (const p of L) if (!used.has(p.member || p.name.toLowerCase())) next.push({ ...p, on: false });
-            draftNew.lineup = next;
-            render();
-          } }, h("option", { value: "" }, "Use a lineup from…"),
-            pastGames.slice(0, 20).map(g => h("option", { value: g.id }, `${fmtDate(g.date)} ${g.opponent ? (g.isHome ? "vs " : "@ ") + g.opponent : ""}`)));
-          return s;
-        })() : null),
-      h("div", { class: "card lineup-list" }, L.map((p, i) => h("div", { class: `lineup-row${p.on ? "" : " off"}` },
-        h("label", { class: "lineup-check" },
-          h("input", { type: "checkbox", checked: p.on || null, onchange: e => { p.on = e.target.checked; render(); } }),
-          h("span", { class: "order" }, p.on ? String(on.indexOf(p) + 1) : "–"),
-          h("span", null, p.name, p.member ? h("span", { class: "linked", title: "Linked to their account" }, " ●") : null)),
-        h("span", { class: "row-tools" },
-          h("button", { type: "button", class: "icon-btn", "aria-label": `Move ${p.name} up`, onclick: () => move(i, -1) }, "↑"),
-          h("button", { type: "button", class: "icon-btn", "aria-label": `Move ${p.name} down`, onclick: () => move(i, 1) }, "↓"))))),
-      h("div", { class: "pin-search" }, writeIn, h("button", { class: "btn small", type: "button", onclick: addWriteIn }, "Add")),
+      ...lineupBuilder(draftNew),
       h("div", { class: "legend" }, "Checked players bat in this order; use the arrows to set it. Teammates are linked to their accounts (●), so their stats follow them. Fill-ins can be added here or during the game."),
       h("div", { class: "form-actions" },
         h("a", { class: "btn ghost", href: "#/score" }, "Cancel"),
@@ -416,6 +401,113 @@ window.StatScorer = function (ctx) {
     ];
   }
 
+  // ---------- Batting order picker (New Game, and a manager setting a scheduled game's lineup) ----------
+
+  /// d = { lineup: [{ id, name, member?, on }], write: "" }. Checked players bat in this order.
+  function lineupBuilder(d) {
+    const L = d.lineup;
+    const on = L.filter(p => p.on);
+    const move = (i, k) => { const j = i + k; if (j < 0 || j >= L.length) return; [L[i], L[j]] = [L[j], L[i]]; render(); };
+    const pastGames = state.games.filter(g => (g.lines || []).length).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    const addWriteIn = () => {
+      const n = d.write.trim();
+      if (!n) return;
+      const p = linkedPlayer(null, n);
+      const existing = p.member && L.find(x => x.member === p.member);
+      if (existing) existing.on = true; else L.push({ ...p, on: true });
+      d.write = "";
+      render();
+    };
+    const writeIn = h("input", { type: "text", placeholder: "Add a fill-in or late arrival", maxlength: "80", value: d.write,
+      "aria-label": "Add a player", oninput: e => { d.write = e.target.value; },
+      onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); addWriteIn(); } } });
+    return [
+      h("h2", { class: "section" }, `Batting order (${on.length})`,
+        pastGames.length ? (() => {
+          const sel = h("select", { class: "control", "aria-label": "Use a lineup from another game", onchange: e => {
+            const g = pastGames.find(x => x.id === e.target.value);
+            if (!g) return;
+            // The order players appear in that game (bench and courtesy runners come after the lineup).
+            const used = new Set();
+            const next = g.lines.filter(l => l.pa > 0 || l.r > 0).map(l => {
+              const m = l.member ? state.members.find(x => x.uid === l.member) : null;
+              used.add(l.member || l.name.toLowerCase());
+              return { id: E.newID(), name: m ? m.name : l.name, member: m ? m.uid : undefined, on: true };
+            });
+            for (const p of L) if (!used.has(p.member || p.name.toLowerCase())) next.push({ ...p, on: false });
+            d.lineup = next;
+            render();
+          } }, h("option", { value: "" }, "Use a lineup from…"),
+            pastGames.slice(0, 20).map(g => h("option", { value: g.id }, `${fmtDate(g.date)} ${g.opponent ? (g.isHome ? "vs " : "@ ") + g.opponent : ""}`)));
+          return sel;
+        })() : null),
+      h("div", { class: "card lineup-list" }, L.map((p, i) => h("div", { class: `lineup-row${p.on ? "" : " off"}` },
+        h("label", { class: "lineup-check" },
+          h("input", { type: "checkbox", checked: p.on || null, onchange: e => { p.on = e.target.checked; render(); } }),
+          h("span", { class: "order" }, p.on ? String(on.indexOf(p) + 1) : "–"),
+          h("span", null, p.name, p.member ? h("span", { class: "linked", title: "Linked to their account" }, " ●") : null,
+            p.note ? h("span", { class: "muted small" }, ` ${p.note}`) : null)),
+        h("span", { class: "row-tools" },
+          h("button", { type: "button", class: "icon-btn", "aria-label": `Move ${p.name} up`, onclick: () => move(i, -1) }, "↑"),
+          h("button", { type: "button", class: "icon-btn", "aria-label": `Move ${p.name} down`, onclick: () => move(i, 1) }, "↓"))))),
+      h("div", { class: "pin-search" }, writeIn, h("button", { class: "btn small", type: "button", onclick: addWriteIn }, "Add")),
+    ];
+  }
+
+  /// A manager's lineup for a scheduled game: what they saved before, or who said they're coming.
+  const lineupDrafts = new Map();
+  function scheduleLineupEditor(sg, onDone) {
+    if (!lineupDrafts.has(sg.id)) {
+      const answers = sg.availability || {};
+      const status = uid => answers[uid]?.status;
+      let lineup;
+      if ((sg.lineup || []).length) {
+        const used = new Set(sg.lineup.map(p => p.member).filter(Boolean));
+        lineup = [...sg.lineup.map(p => ({ id: E.newID(), name: p.name, member: p.member || undefined, on: true })),
+          ...state.members.filter(m => !used.has(m.uid)).map(m => ({ id: E.newID(), name: m.name, member: m.uid, on: false }))];
+      } else {
+        const anyIn = state.members.some(m => status(m.uid) === "in");
+        const rank = m => ({ in: 0, maybe: 1 }[status(m.uid)] ?? 2);
+        lineup = [...state.members].sort((a, b) => rank(a) - rank(b) || (a.name || "").localeCompare(b.name || ""))
+          .map(m => ({ id: E.newID(), name: m.name, member: m.uid, on: anyIn ? status(m.uid) === "in" : status(m.uid) !== "out",
+            note: status(m.uid) ? `(${status(m.uid)})` : "" }));
+      }
+      lineupDrafts.set(sg.id, { lineup, write: "" });
+    }
+    const d = lineupDrafts.get(sg.id);
+    const on = d.lineup.filter(p => p.on);
+    return h("div", { class: "card game-form lineup-editor" },
+      h("div", { class: "form-title" }, `Lineup · ${sg.opponent ? `${sg.isHome ? "vs" : "@"} ${sg.opponent}` : "Game"} · ${fmtDate(sg.date)}`),
+      ...lineupBuilder(d),
+      h("div", { class: "legend" }, "Checked players bat in this order. Whoever keeps score starts the game with this lineup; they can make subs and add late arrivals during it."),
+      h("div", { class: "form-actions" },
+        h("button", { class: "btn ghost", type: "button", onclick: () => { lineupDrafts.delete(sg.id); onDone(null); } }, "Cancel"),
+        h("button", { class: "btn", type: "button", disabled: !on.length || null, onclick: ctx.action(async () => {
+          await ctx.saveLineup(sg.id, on.map(p => (p.member ? { name: p.name.trim(), member: p.member } : { name: p.name.trim() })));
+          lineupDrafts.delete(sg.id);
+          onDone(true);
+        }, { after: () => {} }) }, "Save Lineup")));
+  }
+
+  /// Starts (or reopens) the web-scored game for a scheduled game, with the lineup a manager set.
+  async function startFromSchedule(sg) {
+    if (recs.has(sg.id) || (remoteList || []).some(r => r.id === sg.id)) return sg.id;
+    if (!DEMO) {
+      try { if (await readRemote(state.key, sg.id)) return sg.id; } catch { /* offline: start here */ }
+    }
+    const last = [...state.games].filter(g => g.isFinal && g.event).sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+    const g = {
+      id: sg.id, date: sg.date, team: state.team?.name || "", opponent: sg.opponent || "",
+      lineup: (sg.lineup || []).map(p => (p.member ? { id: E.newID(), name: memberName(p.member) || p.name, member: p.member } : { id: E.newID(), name: p.name })),
+      bench: [], subs: {}, extras: [], plays: [], courtesySwaps: [], opponentRuns: {},
+      isFinal: false, isHome: !!sg.isHome, isSolo: false,
+      event: last ? { kind: last.eventKind || "season", name: last.event } : null,
+    };
+    if (!g.lineup.length) return null;
+    return createGame(g);
+  }
+  const memberName = uid => state.members.find(m => m.uid === uid)?.name;
+
   async function startGame() {
     const L = draftNew.lineup.filter(p => p.on);
     if (!L.length) return null;
@@ -427,12 +519,18 @@ window.StatScorer = function (ctx) {
       isFinal: false, isHome: draftNew.isHome, isSolo: false,
       event: draftNew.eventKind && eventName ? { kind: draftNew.eventKind, name: eventName } : null,
     };
+    const id = await createGame(g);
+    if (id) Object.assign(draftNew, { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "" });
+    return id;
+  }
+
+  async function createGame(g) {
     const rec = { id: g.id, teamId: state.key, teamName: state.team?.name || "", members: state.members.map(m => ({ uid: m.uid, name: m.name })),
-      game: g, rev: 0, syncedRev: 0, pending: [], updateTime: null, conflict: null, error: null, createdAt: Date.now(), savedAt: Date.now() };
+      links: state.links || [], game: g, rev: 0, syncedRev: 0, pending: [], updateTime: null, conflict: null, error: null,
+      createdAt: Date.now(), savedAt: Date.now() };
     recs.set(rec.id, rec);
     const ok = await change(rec, () => true);   // revision 1: saved here, then uploaded
     if (!ok) { recs.delete(rec.id); return null; }
-    Object.assign(draftNew, { opponent: "", isHome: false, date: null, eventKind: "", eventName: "", lineup: null, write: "" });
     Object.assign(ui, { id: rec.id, sheet: null, inningCheck: null, breakAfter: null });
     resetTap();
     return rec.id;
@@ -990,6 +1088,7 @@ window.StatScorer = function (ctx) {
     const w = sh.work;
     const batted = new Set(g.plays.map(p => p.batterID));
     const finished = g.isFinal;
+    const manager = isManagerHere();
     const move = (i, d) => { const j = i + d; if (j < 0 || j >= w.lineup.length) return; [w.lineup[i], w.lineup[j]] = [w.lineup[j], w.lineup[i]]; render(); };
     const inGame = new Set([...w.lineup, ...w.bench].map(p => p.member).filter(Boolean));
     const available = members(rec).filter(m => !inGame.has(m.uid));
@@ -1004,16 +1103,18 @@ window.StatScorer = function (ctx) {
       render();
     };
     const canSave = w.lineup.length && [...w.lineup, ...w.bench, ...w.extras].every(p => p.name.trim());
-    const nameInput = p => h("input", { type: "text", value: p.name, maxlength: "80", "aria-label": "Name", oninput: e => { p.name = e.target.value; } });
+    const nameInput = p => (manager ? h("input", { type: "text", value: p.name, maxlength: "80", "aria-label": "Name", oninput: e => { p.name = e.target.value; } })
+      : h("span", { class: "lineup-name" }, p.name));
     return sheet(finished ? "Fix Lineup" : "Lineup & Subs", [
       h("div", { class: "k" }, "Batting order"),
       h("div", { class: "card lineup-list" }, w.lineup.map((p, i) => h("div", { class: "lineup-row" },
         h("span", { class: "order" }, String(i + 1)), nameInput(p),
         h("span", { class: "row-tools" },
-          h("button", { type: "button", class: "icon-btn", "aria-label": "Move up", onclick: () => move(i, -1) }, "↑"),
-          h("button", { type: "button", class: "icon-btn", "aria-label": "Move down", onclick: () => move(i, 1) }, "↓"),
+          manager ? h("button", { type: "button", class: "icon-btn", "aria-label": "Move up", onclick: () => move(i, -1) }, "↑") : null,
+          manager ? h("button", { type: "button", class: "icon-btn", "aria-label": "Move down", onclick: () => move(i, 1) }, "↓") : null,
           !finished ? h("button", { type: "button", class: "link-btn", onclick: () => { w.subFor = p.id; w.subName = ""; render(); } }, "Sub") : null,
-          !batted.has(p.id) ? h("button", { type: "button", class: "link-btn danger", onclick: () => { w.lineup.splice(i, 1); render(); } }, "Remove") : null)))),
+          manager && !batted.has(p.id) ? h("button", { type: "button", class: "link-btn danger", onclick: () => { w.lineup.splice(i, 1); render(); } }, "Remove") : null)))),
+      manager ? null : h("div", { class: "muted small" }, "A manager sets the batting order. You can sub someone in or add a late arrival at the bottom."),
       w.subFor ? h("div", { class: "card pad" },
         h("b", null, `Sub in for ${w.lineup.find(p => p.id === w.subFor)?.name}`),
         h("p", { class: "muted small" }, "They take this spot in the batting order. Both players keep their own stats."),
@@ -1101,7 +1202,7 @@ window.StatScorer = function (ctx) {
   const ready = loadRecs().then(() => { syncAll(); });
 
   return {
-    ready, isScorerHere, recsForTeam: teamRecs,
+    ready, isScorerHere, isManagerHere, recsForTeam: teamRecs, scheduleLineupEditor, startFromSchedule,
     view(r) {
       if (!r.id) return listView();
       if (r.id === "new") return newGameView();
