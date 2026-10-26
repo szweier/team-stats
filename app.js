@@ -131,7 +131,7 @@
       class: "control", "aria-label": "Season or tournament",
       onchange: e => { state.event = e.target.value; storage.set("statbook.event", state.event || null); render(); },
     },
-      option("", "All seasons & tournaments"),
+      option("", "All seasons"),
       seasons.length ? h("optgroup", { label: "Seasons" }, seasons.map(e => option(e.key, e.name))) : null,
       tournaments.length ? h("optgroup", { label: "Tournaments" }, tournaments.map(e => option(e.key, e.name))) : null,
       state.games.some(g => !g.event) ? option("none", "No season") : null);
@@ -882,7 +882,7 @@
           h("div", null,
             h("h1", null, state.team?.name || "Team"),
             h("div", { class: "sub" }, `${state.members.length} player${state.members.length === 1 ? "" : "s"} · ${finals.length} game${finals.length === 1 ? "" : "s"} played`,
-              DEMO ? " · " : "", DEMO ? h("span", { class: "pill demo" }, "Demo data") : null)),
+              DEMO ? " " : "", DEMO ? h("span", { class: "pill demo" }, "Demo data") : null)),
           h("div", { class: "record" }, h("b", null, record(state.games)), h("span", { class: "sub" }, "Record"))),
         h("nav", { class: "tabs", "aria-label": "Sections" },
           tab("schedule", "#/", "Schedule"), tab("games", "#/games", "Games"), tab("stats", "#/stats", "Stats"),
@@ -956,18 +956,18 @@
           h("span", { class: "day" }, d ? d.getDate() : ""),
           h("span", { class: "mon" }, d ? d.toLocaleDateString(undefined, { month: "short" }) : "")),
         h("div", { class: "sched-info" },
+          manager ? h("div", { class: "sched-admin" },
+            h("button", { class: "link-btn", type: "button", onclick: () => { state.editing = g.id; render(); } }, "Edit"),
+            h("button", { class: "link-btn danger", type: "button", onclick: e => {
+              if (confirm(`Delete ${opp} on ${fmtDate(g.date)}? Everyone's answers go with it.`)) action(() => deleteGame(g.id), { after: refreshNow })(e);
+            } }, "Delete")) : null,
           h("div", { class: "opp" }, opp),
           h("div", { class: "meta" }, [g.time ? fmtTime(g.time) : "Time TBD", g.isHome ? "Home" : "Away"].join(" · ")),
           g.location || typeof g.lat === "number" ? h("div", { class: "loc" },
             h("span", { class: "loc-name" }, "📍 ", g.location || "Pinned on the map"),
             h("span", { class: "loc-links" }, mapLinks(g).map(([label, href]) =>
               h("a", { class: "map-link", href, target: "_blank", rel: "noopener" }, label)))) : null,
-          g.notes ? h("div", { class: "notes" }, g.notes) : null),
-        manager ? h("div", { class: "sched-admin" },
-          h("button", { class: "link-btn", type: "button", onclick: () => { state.editing = g.id; render(); } }, "Edit"),
-          h("button", { class: "link-btn danger", type: "button", onclick: e => {
-            if (confirm(`Delete ${opp} on ${fmtDate(g.date)}? Everyone's answers go with it.`)) action(() => deleteGame(g.id), { after: refreshNow })(e);
-          } }, "Delete")) : null),
+          g.notes ? h("div", { class: "notes" }, g.notes) : null)),
       isPast ? null : h("div", { class: "answer" },
         h("span", { class: "answer-label" }, "Can you make it?"),
         h("div", { class: "seg", role: "group", "aria-label": "Your availability" }, ANSWERS.map(([value, label]) =>
@@ -1176,6 +1176,24 @@
         h("button", { class: "btn", type: "submit" }, g ? "Save" : "Add Game")));
   }
 
+  /// Player / Scheduler / Manager for one teammate (managers only).
+  function roleSelect(uid, current, managers, schedulers) {
+    const sel = h("select", { class: "role-select", "aria-label": "Role", onchange: e => {
+      const role = e.target.value;
+      const mgrs = [...managers].filter(x => x !== uid), scheds = [...schedulers].filter(x => x !== uid);
+      if (role === "manager") mgrs.push(uid);
+      if (role === "scheduler") scheds.push(uid);
+      sel.disabled = true;
+      setRoles(state.team.members, mgrs, scheds).then(refreshNow, err => {
+        sel.value = current;   // didn't save: show the role they still have
+        sel.disabled = false;
+        alert(err.message || "Something went wrong. Try again.");
+      });
+    } }, ["player", "scheduler", "manager"].map(r => h("option", { value: r }, r[0].toUpperCase() + r.slice(1))));
+    sel.value = current;
+    return sel;
+  }
+
   function teamView() {
     const manager = isManager();
     const managers = new Set(state.team?.managers || []);
@@ -1200,16 +1218,11 @@
             : schedulers.has(m.uid) ? h("span", { class: "pill sched" }, "Scheduler") : null,
           m.uid === me() ? h("span", { class: "you" }, "You") : null),
         manager && m.uid !== me() ? h("div", { class: "radmin" },
-          h("button", { class: "link-btn", type: "button", onclick: action(() => setRoles(state.team.members,
-            managers.has(m.uid) ? [...managers].filter(x => x !== m.uid) : [...managers, m.uid]), { after: refreshNow }) },
-            managers.has(m.uid) ? "Remove manager" : "Make manager"),
-          managers.has(m.uid) ? null : h("button", { class: "link-btn", type: "button", onclick: action(() => setRoles(state.team.members, [...managers],
-            schedulers.has(m.uid) ? [...schedulers].filter(x => x !== m.uid) : [...schedulers, m.uid]), { after: refreshNow }) },
-            schedulers.has(m.uid) ? "Stop scheduling" : "Let schedule"),
+          roleSelect(m.uid, managers.has(m.uid) ? "manager" : schedulers.has(m.uid) ? "scheduler" : "player", managers, schedulers),
           h("button", { class: "link-btn danger", type: "button", onclick: e => {
             if (confirm(`Remove ${m.name || "this player"} from ${state.team.name}?`)) action(() => removeMember(m.uid), { after: refreshNow })(e);
           } }, "Remove")) : null))),
-      manager ? h("div", { class: "legend" }, "Managers run the team. Schedulers can add, edit and delete games on the schedule, and nothing else.") : null,
+      manager ? h("div", { class: "legend" }, "Managers run the team. Schedulers can add, edit and delete games on the schedule, and nothing else. Players see the schedule and stats and answer for themselves.") : null,
       manager && state.settings?.scorerCode ? [
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
@@ -1501,7 +1514,7 @@
       years.length > 1 ? h("select", { class: "control", "aria-label": "Year", onchange: e => pick("myYear", e.target.value) },
         option("", "All years", !year), years.map(y => option(y, y, y === year))) : null,
       events.length ? h("select", { class: "control", "aria-label": "Season or tournament", onchange: e => pick("myEvent", e.target.value) },
-        option("", "All seasons & tournaments", !event),
+        option("", "All seasons", !event),
         events.some(e => e.kind !== "tournament") ? h("optgroup", { label: "Seasons" },
           events.filter(e => e.kind !== "tournament").map(e => option(e.key, e.name, e.key === event))) : null,
         events.some(e => e.kind === "tournament") ? h("optgroup", { label: "Tournaments" },
@@ -1574,6 +1587,7 @@
     const views = { schedule: scheduleView, games: gamesView, stats: statsView, me: myStatsView, spray: sprayView, team: teamView };
     const content = r.name === "game" ? gameView(r.id) : views[r.name]();
     app.replaceChildren(...shell(r.name === "game" ? "games" : r.name, content));
+    document.querySelector(".tabs a.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
     window.scrollTo(0, y);
     document.title = `${state.team?.name || "Team"} · Team Stats`;
   }

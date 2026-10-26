@@ -154,6 +154,7 @@ select.control {
   max-width: 100%;
 }
 .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.controls .control { flex: 1 1 180px; min-width: 0; }
 
 /* ---------- Lock screen ---------- */
 
@@ -272,7 +273,8 @@ table.line td.r, table.line th.r { border-left: 1px solid var(--line); font-weig
 .my-rate { padding: 16px 8px 14px; text-align: center; }
 .my-rate b { display: block; font: 800 32px/1 var(--round); color: var(--accent); font-variant-numeric: tabular-nums; }
 .my-rate span, .my-counts span { display: block; margin-top: 6px; font: 800 11px/1 var(--round); letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
-.my-counts { display: grid; grid-template-columns: repeat(auto-fit, minmax(62px, 1fr)); margin-top: 8px; padding: 6px 4px; }
+.my-counts { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); margin-top: 8px; padding: 6px 4px; }
+@media (max-width: 700px) { .my-counts { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .my-counts div { text-align: center; padding: 8px 4px; }
 .my-counts b { display: block; font: 800 20px/1 var(--round); font-variant-numeric: tabular-nums; }
 @media (max-width: 480px) { .my-rate b { font-size: 22px; } }
@@ -354,7 +356,9 @@ h2.section .btn { margin-left: auto; letter-spacing: 0; text-transform: none; }
 }
 .sched-info .map-link:hover { border-color: var(--accent, currentColor); }
 .sched-info .notes { margin-top: 6px; font-size: 14px; white-space: pre-wrap; }
-.sched-admin { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+/* Edit / Delete float in the corner so the field, map buttons and notes get the card's full width. */
+.sched-admin { float: right; display: flex; gap: 2px; margin: -6px -8px 0 8px; }
+.sched-admin .link-btn { padding: 6px 8px; font-size: 13px; }
 .answer { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
 .answer-label { font: 700 14px/1 var(--round); color: var(--muted); }
 .seg { display: inline-flex; background: var(--card-2); border: 1px solid var(--line); border-radius: 12px; padding: 3px; gap: 3px; margin-left: auto; }
@@ -423,12 +427,18 @@ details.fold.past summary { margin-bottom: 10px; }
 .pill.mgr { background: var(--accent); color: #fff; }
 .pill.sched { background: var(--card-2); color: var(--accent); border: 1px solid var(--accent); }
 .you { color: var(--muted); font: 600 13px/1 var(--round); }
-.radmin { display: flex; gap: 12px; }
+.radmin { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+.role-select {
+  appearance: none; -webkit-appearance: none; background: var(--card-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 10px center;
+  border: 1px solid var(--line); border-radius: 9px; padding: 6px 28px 6px 10px; font: 700 13px/1.2 var(--round);
+}
 .team-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 @media (max-width: 560px) {
-  .tabs { gap: 0; }
-  .tabs a { padding-left: 10px; padding-right: 10px; font-size: 14px; }
+  .tabs { gap: 0; margin-left: -6px; margin-right: -6px; }
+  .tabs a { padding-left: 8px; padding-right: 8px; font-size: 14px; }
+  .sched-info .loc-links { gap: 5px; }
+  .sched-info .map-link { padding: 6px 9px; }
   .seg { margin-left: 0; width: 100%; }
   .seg-btn { flex: 1; }
   .row2 { grid-template-columns: 1fr; }
