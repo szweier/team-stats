@@ -1166,7 +1166,7 @@
       },
     },
       h("div", { class: "form-title" }, g ? "Edit game" : "Add a game"),
-      h("div", { class: "row2" }, h("label", null, "Date", date), h("label", null, "Time", time)),
+      h("div", { class: "row2" }, h("label", null, "Date", date), h("label", null, "Time (optional)", time)),
       h("div", { class: "row2" }, h("label", null, "Opponent", opponent), h("label", null, "Home or away", side)),
       h("label", null, "Location", loc),
       where.el,
