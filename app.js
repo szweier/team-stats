@@ -868,6 +868,7 @@
           app.replaceChildren(panel(
             h("h1", null, "Check your email"),
             h("p", null, `We sent a sign-in link to ${input.value.trim()}. Open it on this device to finish signing in. It may take a minute, and check spam if it doesn't show up.`),
+            h("p", { class: "or" }, "If the link opens in a different app or browser, you'll be asked for your email once, then you're in there. Use the newest email if you asked more than once."),
             h("button", { class: "btn ghost", type: "button", onclick: () => signInView() }, "Use a different email")));
         } catch (e2) {
           err.textContent = e2.message;
@@ -883,15 +884,31 @@
   function finishSignInView(oobCode, message) {
     const input = h("input", { type: "email", placeholder: "you@email.com", autocomplete: "email", required: true, "aria-label": "Email" });
     const err = h("div", { class: "err", role: "alert" }, message || "");
+    const button = h("button", { class: "btn", type: "submit" }, "Sign In");
     app.replaceChildren(panel(
       h("h1", null, "Finish signing in"),
-      h("p", null, "Enter the email address the link was sent to."),
+      h("p", null, "Enter the email address the link was sent to. (This shows when the link opens in a different app or browser from the one you asked in.)"),
       h("form", {
         onsubmit: async e => {
           e.preventDefault();
-          try { await finishSignIn(input.value.trim(), oobCode); start(); } catch (e2) { err.textContent = e2.message; }
+          const email = input.value.trim();
+          button.disabled = true; button.textContent = "Signing in…"; err.textContent = "";
+          try { await finishSignIn(email, oobCode); return start(); }
+          catch (e2) {
+            if (await idToken()) return start();
+            // The link can't be used any more: straight to sending a new one, email filled in.
+            if (/expired or was already used/.test(e2.message)) {
+              storage.set("statbook.pendingEmail", email);
+              return signInView(`${e2.message.replace(" Send yourself a new one.", "")} Tap below to get a new one.`);
+            }
+            err.textContent = /doesn't look right/.test(e2.message)
+              ? "That isn't the email this link was sent to. Check it for typos, or go back and send yourself a new link." : e2.message;
+            button.disabled = false; button.textContent = "Sign In";
+          }
         },
-      }, input, h("button", { class: "btn", type: "submit" }, "Sign In"), err)));
+      }, input, button, err),
+      h("p", { class: "or" }, h("a", { href: "#", onclick: e => { e.preventDefault(); signInView(); } }, "Send a new link instead"))));
+    setTimeout(() => input.focus(), 50);
   }
 
   function nameView() {
@@ -905,7 +922,10 @@
           e.preventDefault();
           const name = input.value.trim();
           if (!name) return;
-          try { await saveName(name); start(); } catch (e2) { alert(e2.message); }
+          const button = e.currentTarget.querySelector("button");
+          button.disabled = true; button.textContent = "Saving…";
+          try { await saveName(name); await start(); }
+          catch (e2) { alert(e2.message); button.disabled = false; button.textContent = "Continue"; }
         },
       }, input, h("button", { class: "btn", type: "submit" }, "Continue"))));
     setTimeout(() => input.focus(), 50);
@@ -2026,11 +2046,19 @@
         h("p", null, "This site isn't set up yet: fill in public/config.js with your Firebase project ID and web API key.")));
     }
     try {
-      // Coming back from the emailed sign-in link.
-      if (!DEMO && params.get("mode") === "signIn" && params.get("oobCode")) {
+      // Coming back from the emailed sign-in link. Read from the address as it is now (not as the page opened):
+      // once the link is used it's gone from there, so saving your name or finishing sign-in never tries it twice.
+      const link = new URLSearchParams(location.search);
+      if (!DEMO && link.get("mode") === "signIn" && link.get("oobCode")) {
+        const code = link.get("oobCode");
+        history.replaceState(null, "", returnURL());
         const email = storage.get("statbook.pendingEmail");
-        if (!email) return finishSignInView(params.get("oobCode"));
-        try { await finishSignIn(email, params.get("oobCode")); } catch (e) { history.replaceState(null, "", returnURL()); return signInView(e.message); }
+        // Already signed in here as this person (the link was opened twice, or from another tab): carry on.
+        const someoneElse = email && session && email.toLowerCase() !== String(session.email || "").toLowerCase();
+        if (someoneElse || !(await idToken())) {
+          if (!email) return finishSignInView(code);
+          try { await finishSignIn(email, code); } catch (e) { return signInView(e.message); }
+        }
       }
       if (!DEMO && !(await idToken())) return signInView();
 
