@@ -357,6 +357,28 @@
     if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
     state.profile = (await getDoc(`users/${me()}`)) || { teams: {} };
     state.profile.teams = state.profile.teams || {};
+    // Every team you're on, including ones a manager added you to from the app (no invite involved).
+    try {
+      const rows = await fs("POST", `${DOCS}:runQuery`, { body: { structuredQuery: {
+        from: [{ collectionId: "teams" }],
+        where: { fieldFilter: { field: { fieldPath: "members" }, op: "ARRAY_CONTAINS", value: { stringValue: me() } } },
+        select: { fields: [{ fieldPath: "name" }] },
+      } } });
+      const onTeams = new Set();
+      for (const row of rows || []) {
+        if (!row.document) continue;
+        const id = idOf(row.document), name = fieldsOf(row.document).name || "Team";
+        onTeams.add(id);
+        if (state.profile.teams[id] !== name) {
+          state.profile.teams[id] = name;
+          addToMyTeams(id, name).catch(() => {});
+        }
+      }
+      // Teams you were removed from (or that were deleted) drop off the list.
+      for (const id of Object.keys(state.profile.teams)) {
+        if (!onTeams.has(id)) { delete state.profile.teams[id]; dropFromMyTeams(id).catch(() => {}); }
+      }
+    } catch { /* fall back to the saved list */ }
   }
 
   async function saveName(name) {
@@ -394,7 +416,7 @@
   async function claimWithScorerCode(rawCode) {
     const code = clean(rawCode).toUpperCase();
     const link = code.length >= 10 ? await getDoc(`scorerCodes/${code}`) : null;
-    if (!link) throw new Error("That scorer code didn't match a team. Check it in the app under Settings → Team websites.");
+    if (!link) throw new Error("That scorer code didn't match a team. Check it in the app under Teams → your team → Website & Scoring.");
     await changeLists(link.teamId, { add: { members: [me()], managers: [me()] }, set: { joinedWith: code } });
     const team = await getDoc(`teams/${link.teamId}`);
     let settings = await getDoc(`teams/${link.teamId}/private/settings`);
@@ -773,7 +795,7 @@
         : h("p", null, "You're not on a team yet. Ask your team's manager to send you the team's invite link, then open it to join."),
       // Teams start in the Slow Pitch Book app; its scorer code brings a team here and makes you its manager.
       h("details", { class: "fold" }, h("summary", null, "Scorers: add a team from the app"),
-        h("p", { class: "or" }, "Teams are created in the Slow Pitch Book app. There, open Settings → Team websites → your team → Create Website, then tap Set Up Team on Website, or enter the team's scorer code here. You'll become the team's manager."),
+        h("p", { class: "or" }, "Teams are created in the Slow Pitch Book app. There, tap Teams → your team → Website & Scoring → Set Up Team on Website, or enter the team's scorer code here. You'll become the team's manager."),
         h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await claimWithScorerCode(code.value); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
           code, h("button", { class: "btn", type: "submit" }, "Add Team"))),
       h("p", { class: "or" }, `Signed in as ${session.email} · `,
@@ -998,7 +1020,7 @@
         h("h2", { class: "section" }, "Keeping score in the app"),
         h("div", { class: "card pad" },
           h("p", { class: "muted small", style: "margin-top:0" },
-            "In Slow Pitch Book on the scorer's iPhone or iPad: Settings → Team websites → this team → I Have a Scorer Code. Stats from that device then appear here. Only give it to people who keep score."),
+            "In Slow Pitch Book on the scorer's iPhone or iPad: Teams → this team → I Have a Scorer Code. Stats from that device then appear here. Only give it to people who keep score."),
           h("div", { class: "codebox big" }, showCode(state.settings.scorerCode)),
           h("div", { class: "form-actions start" }, copyButton(showCode(state.settings.scorerCode), "Copy Code"))),
       ] : null,
