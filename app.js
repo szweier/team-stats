@@ -357,13 +357,20 @@
   /// Where the emailed link brings you back to: this page with its team/invite, minus sign-in leftovers.
   function returnURL() {
     const u = new URL(location.href);
-    for (const k of ["apiKey", "oobCode", "mode", "lang", "continueUrl", "tenantId"]) u.searchParams.delete(k);
+    for (const k of ["apiKey", "oobCode", "mode", "lang", "continueUrl", "tenantId", "handoff"]) u.searchParams.delete(k);
     u.hash = "";
     return u.toString();
   }
 
   async function sendSignInLink(email) {
-    await authCall("sendOobCode", { requestType: "EMAIL_SIGNIN", email, continueUrl: returnURL(), canHandleCodeInApp: true });
+    const continueUrl = new URL(returnURL());
+    // From the home screen app the link carries a handoff id, so Safari can pass the login back to it.
+    if (standalone()) {
+      const id = randomCode(32, "abcdefghijklmnopqrstuvwxyz0123456789");
+      continueUrl.searchParams.set("handoff", id);
+      storage.set("statbook.handoff", JSON.stringify({ id, at: Date.now() }));
+    }
+    await authCall("sendOobCode", { requestType: "EMAIL_SIGNIN", email, continueUrl: continueUrl.toString(), canHandleCodeInApp: true });
     storage.set("statbook.pendingEmail", email);
   }
 
@@ -372,7 +379,44 @@
     saveSession({ uid: j.localId, email: j.email || email, idToken: j.idToken, refreshToken: j.refreshToken,
                   expires: Date.now() + Number(j.expiresIn || 3600) * 1000 });
     storage.set("statbook.pendingEmail", null);
+    storage.set("statbook.handoff", null);
     history.replaceState(null, "", returnURL());
+  }
+
+  // A web app saved to the iPhone home screen keeps its own login apart from Safari's, and emailed links
+  // always open in Safari. So Safari signs in, leaves the login under the link's random handoff id, and the
+  // home screen app picks it up from there and deletes it (handoffs in firestore.rules).
+  const standalone = () => navigator.standalone === true || matchMedia("(display-mode: standalone)").matches;
+
+  /// The handoff this app is waiting for: links are good for an hour, so older ones are forgotten.
+  function handoffId() {
+    try {
+      const w = JSON.parse(storage.get("statbook.handoff") || "null");
+      return w && Date.now() - w.at < 3600000 ? w.id : null;
+    } catch { return null; }
+  }
+
+  function leaveHandoff(id) {
+    return fs("PATCH", `handoffs/${id}`, { query: [["currentDocument.exists", "false"]], body: { fields: {
+      uid: enc(session.uid), email: enc(session.email || ""), refreshToken: enc(session.refreshToken),
+      expires: { timestampValue: new Date(Date.now() + 10 * 60000).toISOString() },
+    } } });
+  }
+
+  /// Signs this app in from what Safari left, if it's there yet.
+  async function pickUpHandoff() {
+    const id = handoffId();
+    if (!id) return false;
+    let d;
+    // Not there yet (or too old) reads as no access.
+    try { d = await getDoc(`handoffs/${id}`); } catch (e) { if (e instanceof Forbidden) return false; throw e; }
+    if (!d?.refreshToken) return false;
+    saveSession({ uid: d.uid, email: d.email, idToken: null, refreshToken: d.refreshToken, expires: 0 });
+    if (!(await idToken())) return false;
+    storage.set("statbook.handoff", null);
+    storage.set("statbook.pendingEmail", null);
+    deleteDoc(`handoffs/${id}`).catch(() => { /* it stops being readable in 10 minutes anyway */ });
+    return true;
   }
 
   function signOut() {
@@ -898,6 +942,7 @@
         err.textContent = "";
         try {
           await sendSignInLink(input.value.trim());
+          if (standalone()) return waitForHandoffView(input.value.trim());
           app.replaceChildren(panel(
             h("h1", null, "Check your email"),
             h("p", null, `We sent a sign-in link to ${input.value.trim()}. Open it on this device to finish signing in. It may take a minute, and check spam if it doesn't show up.`),
@@ -914,21 +959,59 @@
     setTimeout(() => input.focus(), 50);
   }
 
-  function finishSignInView(oobCode, message) {
+  /// The home screen app, while you open the emailed link in Safari.
+  function waitForHandoffView(email) {
+    const view = panel(
+      h("h1", null, "Check your email"),
+      h("p", null, `We sent a sign-in link to ${email || "your email"}. Tap it: it opens in Safari and signs you in there. Then come back here and this app signs itself in.`),
+      h("p", { class: "or" }, "Waiting for you to tap the link… It may take a minute, and check spam if it doesn't show up."),
+      h("button", { class: "btn ghost", type: "button", onclick: () => signInView() }, "Use a different email"));
+    app.replaceChildren(view);
+    let busy = false;
+    const check = async () => {
+      if (!view.isConnected) return stop();
+      if (busy || document.visibilityState !== "visible") return;
+      busy = true;
+      try { if (await pickUpHandoff()) { stop(); return start(); } } catch { /* offline: try again */ }
+      busy = false;
+    };
+    const timer = setInterval(check, 3000);
+    const stop = () => { clearInterval(timer); document.removeEventListener("visibilitychange", check); };
+    document.addEventListener("visibilitychange", check);
+  }
+
+  /// Safari, after signing in from a link the home screen app asked for.
+  async function handoffDoneView(id) {
+    app.replaceChildren(panel(h("p", null, "Signing in the home screen app…")));
+    const here = h("button", { class: "btn ghost", type: "button", onclick: () => start() }, "Use It Here Instead");
+    try { await leaveHandoff(id); }
+    catch (e) {
+      return app.replaceChildren(panel(h("h1", null, "Almost there"),
+        h("p", null, `You're signed in here in Safari, but the home screen app couldn't be signed in (${e.message}). Open it and send yourself a new link.`), here));
+    }
+    app.replaceChildren(panel(
+      h("h1", null, "You're signed in"),
+      h("p", null, "Go back to Team Stats on your home screen. It signs itself in within a few seconds."),
+      here));
+  }
+
+  function finishSignInView(oobCode, message, handoff) {
     const input = h("input", { type: "email", placeholder: "you@email.com", autocomplete: "email", required: true, "aria-label": "Email" });
     const err = h("div", { class: "err", role: "alert" }, message || "");
     const button = h("button", { class: "btn", type: "submit" }, "Sign In");
     app.replaceChildren(panel(
       h("h1", null, "Finish signing in"),
-      h("p", null, "Enter the email address the link was sent to. (This shows when the link opens in a different app or browser from the one you asked in.)"),
+      h("p", null, handoff
+        ? "Enter the email address the link was sent to, and the home screen app signs in too."
+        : "Enter the email address the link was sent to. (This shows when the link opens in a different app or browser from the one you asked in.)"),
       h("form", {
         onsubmit: async e => {
           e.preventDefault();
           const email = input.value.trim();
           button.disabled = true; button.textContent = "Signing in…"; err.textContent = "";
-          try { await finishSignIn(email, oobCode); return start(); }
+          try { await finishSignIn(email, oobCode); return handoff ? handoffDoneView(handoff) : start(); }
           catch (e2) {
-            if (await idToken()) return start();
+            if (!handoff && await idToken()) return start();
             // The link can't be used any more: straight to sending a new one, email filled in.
             if (/expired or was already used/.test(e2.message)) {
               storage.set("statbook.pendingEmail", email);
@@ -2262,16 +2345,24 @@
       const link = new URLSearchParams(location.search);
       if (!DEMO && link.get("mode") === "signIn" && link.get("oobCode")) {
         const code = link.get("oobCode");
+        // Asked for from the home screen app (and opened here in Safari, as iPhones do).
+        const handoff = standalone() ? null : link.get("handoff");
         history.replaceState(null, "", returnURL());
         const email = storage.get("statbook.pendingEmail");
         // Already signed in here as this person (the link was opened twice, or from another tab): carry on.
+        // For the home screen app always use the link, so it gets the account the link was for.
         const someoneElse = email && session && email.toLowerCase() !== String(session.email || "").toLowerCase();
-        if (someoneElse || !(await idToken())) {
-          if (!email) return finishSignInView(code);
+        if (handoff || someoneElse || !(await idToken())) {
+          if (!email) return finishSignInView(code, "", handoff);
           try { await finishSignIn(email, code); } catch (e) { return signInView(e.message); }
         }
+        if (handoff) return handoffDoneView(handoff);
       }
-      if (!DEMO && !(await idToken())) return signInView();
+      if (!DEMO && !(await idToken())) {
+        // The home screen app reopened while you were signing in over in Safari.
+        if (handoffId() && await pickUpHandoff().catch(() => false)) return start();
+        return handoffId() && standalone() ? waitForHandoffView(storage.get("statbook.pendingEmail")) : signInView();
+      }
 
       app.replaceChildren(panel(h("p", null, "Loading…")));
       await loadProfile();
