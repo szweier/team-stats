@@ -712,3 +712,34 @@ details.fold.past summary { margin-bottom: 10px; }
 .seg-btn.side.on { background: var(--accent); color: var(--on-accent); }
 .game-row.toss { flex-wrap: wrap; }
 .game-row.toss .side-pick { flex: 1 1 100%; }
+
+/* ---------- Stats: Leaders ---------- */
+
+.seg.stats-modes { margin-left: 0; flex: 0 0 auto; }
+.seg-btn.stats-mode.on { background: var(--accent); color: var(--on-accent); }
+h2.section.leaders-title { margin-top: 22px; }
+/* A row of top-five cards that scrolls sideways, running to the screen's edges. */
+.leader-row {
+  display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: none;
+  margin: 0 -16px; padding: 2px 16px 6px; scroll-padding: 0 16px;
+}
+.leader-row::-webkit-scrollbar { display: none; }
+.leader-card {
+  flex: 0 0 132px; scroll-snap-align: start; display: grid; justify-items: center; gap: 6px; text-align: center;
+  padding: 16px 10px 14px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.leader-card.first { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset, var(--shadow); }
+.leader-face {
+  position: relative; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
+  background: linear-gradient(var(--board-1), var(--board-2)); color: var(--optic); font: 800 22px/1 var(--round);
+  letter-spacing: 0.02em; border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.leader-place {
+  position: absolute; top: -4px; left: -6px; min-width: 24px; height: 24px; padding: 0 6px; border-radius: 12px;
+  display: grid; place-items: center; background: var(--card-2); color: var(--text); border: 1px solid var(--line);
+  font: 800 13px/1 var(--round);
+}
+.leader-card.first .leader-place { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.leader-name { font: 700 15px/1.2 var(--round); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leader-value { font: 800 24px/1 var(--round); font-variant-numeric: tabular-nums; }
+.leader-card.first .leader-value { color: var(--accent); }

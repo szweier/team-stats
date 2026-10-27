@@ -51,6 +51,7 @@
     scored: {},           // game id → { stamp, game }: the full web-scored game for the drawn scorebook
     renaming: null,       // scorebook name an admin is renaming (Team tab)
     statsSort: { col: "avg", dir: -1 },
+    statsMode: "leaders", // Stats: "leaders" (top five in each category) or "table" (every player)
     statsTeam: "",
     sprayPlayer: "",
     sprayGame: "",
@@ -2039,6 +2040,115 @@
     const teams = [...new Set(state.games.map(g => g.team).filter(Boolean))].sort();
     const team = teams.includes(state.statsTeam) ? state.statsTeam : "";
     const games = state.games.filter(g => (!team || g.team === team) && inEvent(g));
+    const finals = games.filter(g => g.isFinal).length;
+    const mode = state.statsMode === "table" ? "table" : "leaders";
+    const modeBtn = (key, label) => h("button", { class: `seg-btn stats-mode${mode === key ? " on" : ""}`, type: "button",
+      "aria-pressed": String(mode === key), onclick: () => { state.statsMode = key; render(); } }, label);
+    return [
+      h("h2", { class: "section" }, currentEventLabel() || "Season Stats",
+        h("span", { class: "rec" }, `${record(games)} · ${finals} game${finals === 1 ? "" : "s"}`)),
+      h("div", { class: "controls" },
+        h("div", { class: "seg stats-modes", role: "group", "aria-label": "Show" }, modeBtn("leaders", "Leaders"), modeBtn("table", "All Players")),
+        teams.length > 1
+          ? h("select", { class: "control", "aria-label": "Team", onchange: e => { state.statsTeam = e.target.value; render(); } },
+              h("option", { value: "" }, "All teams"),
+              teams.map(t => { const o = h("option", { value: t }, t); if (t === team) o.selected = true; return o; }))
+          : null),
+      ...(mode === "leaders" ? leadersSection(games) : statsTableSection(games)),
+    ];
+  }
+
+  // ---------- Leaders (top five in each category) ----------
+
+  /// Best Offensive Player: every batting category counts the same. Each player's number in each category is
+  /// compared with the team's (how many spreads above or below the team average it is), and those are averaged,
+  /// strikeouts counting against. Shown as a rating where 50 is the team's average hitter.
+  const OFFENSE = ["avg", "obp", "slg", "ops", "h", "b2", "b3", "hr", "tb", "rbi", "r", "bb", "k"];
+  function offenseRatings(rows) {
+    const spread = OFFENSE.map(f => {
+      const vals = rows.map(r => r[f]);
+      const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
+      const sd = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
+      return { f, mean, sd };
+    });
+    return rows.map(r => {
+      const z = spread.reduce((sum, { f, mean, sd }) => sum + (sd ? ((r[f] - mean) / sd) * (f === "k" ? -1 : 1) : 0), 0) / OFFENSE.length;
+      return { ...r, rating: Math.round(50 + 15 * z) };
+    });
+  }
+
+  const LEADERS = [
+    { key: "rating", label: "Best Offensive Player", rated: true, value: r => String(r.rating) },
+    { key: "avg", label: "Batting Average", qualified: true, value: r => rate(r.avg) },
+    { key: "h", label: "Hits" },
+    { key: "hr", label: "Home Runs" },
+    { key: "rbi", label: "Runs Batted In" },
+    { key: "r", label: "Runs Scored" },
+    { key: "ops", label: "On Base Plus Slugging", qualified: true, value: r => rate(r.ops) },
+    { key: "obp", label: "On Base Percentage", qualified: true, value: r => rate(r.obp) },
+    { key: "slg", label: "Slugging Percentage", qualified: true, value: r => rate(r.slg) },
+    { key: "tb", label: "Total Bases" },
+    { key: "b1", label: "Singles" },
+    { key: "b2", label: "Doubles" },
+    { key: "b3", label: "Triples" },
+    { key: "bb", label: "Walks" },
+    { key: "pa", label: "Plate Appearances" },
+  ];
+  const PITCH_LEADERS = [
+    { key: "outs", label: "Innings Pitched", value: r => inningsText(r.outs) },
+    { key: "era", label: "Earned Run Average", qualified: true, low: true, value: r => r.era.toFixed(2) },
+    { key: "w", label: "Wins" },
+  ];
+
+  /// The top five by `cat` (ties share a place), leaving out anyone with nothing in it.
+  function topFive(rows, cat) {
+    const val = r => r[cat.key];
+    const sorted = rows.filter(r => val(r) != null && (cat.low || cat.rated || val(r) > 0))
+      .sort((a, b) => (cat.low ? val(a) - val(b) : val(b) - val(a)) || b.pa - a.pa || a.name.localeCompare(b.name));
+    let place = 0;
+    return sorted.slice(0, 5).map((r, i) => {
+      if (i === 0 || val(r) !== val(sorted[i - 1])) place = i + 1;
+      return { r, place };
+    });
+  }
+
+  const initials = name => String(name || "?").trim().split(/\s+/).slice(0, 2).map(w => w[0] || "").join("").toUpperCase() || "?";
+
+  function leaderRow(cat, rows) {
+    const top = topFive(rows, cat);
+    if (!top.length) return [];
+    return [
+      h("h2", { class: "section leaders-title" }, cat.label),
+      h("div", { class: "leader-row", role: "list" }, top.map(({ r, place }) =>
+        h("div", { class: `leader-card${place === 1 ? " first" : ""}`, role: "listitem" },
+          h("div", { class: "leader-face", "aria-hidden": "true" }, initials(r.name), h("span", { class: "leader-place" }, place)),
+          h("div", { class: "leader-name" }, r.name),
+          h("div", { class: "leader-value" }, cat.value ? cat.value(r) : r[cat.key])))),
+    ];
+  }
+
+  function leadersSection(games) {
+    const batters = seasonLines(games);
+    if (!batters.length) return [h("div", { class: "card empty" }, "No stats yet.")];
+    // Averages and the overall rating only count regular players: at least 2 plate appearances a game the team
+    // played (anyone, if nobody's there yet), so a 1-for-1 night doesn't top the list.
+    const teamGames = Math.max(1, ...batters.map(r => r.g));
+    const regular = batters.filter(r => r.pa >= 2 * teamGames);
+    const qualified = regular.length ? regular : batters;
+    const rated = offenseRatings(qualified);
+    const pitchers = seasonPitching(games);
+    const pitchGames = games.filter(g => g.isFinal).length;
+    const regularArms = pitchers.filter(p => p.outs >= 3 * pitchGames);
+    const arms = regularArms.length ? regularArms : pitchers.filter(p => p.outs > 0);
+    return [
+      ...LEADERS.flatMap(cat => leaderRow(cat, cat.rated ? rated : cat.qualified ? qualified : batters)),
+      ...PITCH_LEADERS.flatMap(cat => leaderRow(cat, cat.qualified ? arms : pitchers)),
+      h("div", { class: "legend" },
+        `Best Offensive Player weighs every batting category equally (AVG, OBP, SLG, OPS, hits, doubles, triples, home runs, total bases, RBI, runs and walks, with strikeouts counting against) against the rest of the team: 50 is the team's average hitter. It and the averages count players with at least 2 plate appearances a game (${2 * teamGames} so far)${regular.length ? "" : "; nobody has that many yet, so everyone counts for now"}. ERA counts pitchers with an inning a game.`),
+    ];
+  }
+
+  function statsTableSection(games) {
     const { col, dir } = state.statsSort;
     const rows = seasonLines(games).sort((a, b) => {
       if (col === "name") return a.name.localeCompare(b.name) * -dir;
@@ -2047,16 +2157,7 @@
     const total = rows.length ? derive(Object.fromEntries([["name", "Team"], ...FIELDS.map(f => [f, rows.reduce((s, r) => s + r[f], 0)])])) : null;
     if (total) { total._total = true; total.g = ""; }
     const columns = [BATTING[0], { key: "g", label: "G", title: "Games" }, ...BATTING.slice(1)];
-    const finals = games.filter(g => g.isFinal).length;
     return [
-      h("h2", { class: "section" }, currentEventLabel() || "Season Stats",
-        h("span", { class: "rec" }, `${record(games)} · ${finals} game${finals === 1 ? "" : "s"}`)),
-      teams.length > 1 ? h("div", { class: "controls" },
-        teams.length > 1
-          ? h("select", { class: "control", "aria-label": "Team", onchange: e => { state.statsTeam = e.target.value; render(); } },
-              h("option", { value: "" }, "All teams"),
-              teams.map(t => { const o = h("option", { value: t }, t); if (t === team) o.selected = true; return o; }))
-          : null) : null,
       rows.length
         ? statsTable(columns, [...rows, total], {
             sort: state.statsSort,
