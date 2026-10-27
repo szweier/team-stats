@@ -1,6 +1,6 @@
 // Lets the site open with no signal (at a field), so scoring can carry on from what's saved on the phone.
 // Online it always fetches the latest files first, so updates show right away; the saved copy is only used offline.
-const CACHE = "team-stats-v8";
+const CACHE = "team-stats-v9";
 const SHELL = ["./", "index.html", "config.js", "engine.js", "book.js", "scorer.js", "app.js", "styles.css",
   "apple-touch-icon.png", "favicon.png", "manifest.json"];
 
