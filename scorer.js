@@ -850,12 +850,15 @@ window.StatScorer = function (ctx) {
         h("a", { class: "back", href: "#/score" }, "‹ Keep Score"),
         h("div", { class: "card pad" },
           h("h2", { class: "section", style: "margin-top:0" }, `${gameTitle(r.game)} · ${fmtDate(r.game.date)}`),
-          h("p", null, mineOnline
+          h("p", null, r.game.isFinal
+            ? `This game is finished${r.scorerName ? ` (scored by ${mineOnline ? "you" : r.scorerName})` : ""}. Edit it here? Changes update the website; every earlier version is kept.`
+            : mineOnline
             ? "You were scoring this game on another phone or browser. Continue here? That copy will stop uploading."
             : `${r.scorerName || "Someone else"} is scoring this game. Take over? Their phone stops uploading and they'll be told; nothing they scored is lost.`),
           isScorerHere()
             ? h("div", { class: "form-actions start" },
-              h("button", { class: "btn", type: "button", onclick: ctx.action(() => adoptRemote(state.key, r), { after: () => render() }) }, mineOnline ? "Continue Here" : "Take Over Scoring"),
+              h("button", { class: "btn", type: "button", onclick: ctx.action(() => adoptRemote(state.key, r), { after: () => render() }) },
+                r.game.isFinal ? "Edit Game" : mineOnline ? "Continue Here" : "Take Over Scoring"),
               h("a", { class: "btn ghost", href: `#/game/${encodeURIComponent(id)}` }, "Just Watch"))
             : h("a", { class: "btn", href: `#/game/${encodeURIComponent(id)}` }, "Watch the Game")),
       ];
@@ -1087,8 +1090,10 @@ window.StatScorer = function (ctx) {
         h("p", { style: "margin-top:0" }, uploaded ? "This game is saved and on the website." : DEMO ? "Demo games stay on this device." : "Saved on this phone. It uploads as soon as there's a connection; keep this page open until it says Saved & uploaded."),
         h("div", { class: "form-actions start" },
           uploaded ? h("a", { class: "btn", href: `#/game/${encodeURIComponent(g.id)}`, onclick: () => ctx.refreshNow() }, "View Game") : null,
+          btn(g.opponent ? `${g.opponent} Runs` : "Opponent Runs", () => { ui.sheet = { type: "opponent" }; render(); }, "soft"),
           btn("Box Score & Plays", () => { ui.sheet = { type: "box" }; render(); }, "soft"),
           btn("Pitching", () => { ui.sheet = { type: "pitching" }; render(); }, "soft"),
+          btn("Date, Opponent & Season", () => { ui.sheet = { type: "details", work: null }; render(); }, "soft"),
           btn("Reopen Game", async () => { await change(rec, x => { x.isFinal = false; }); render(); }, "soft"))),
     ];
   }

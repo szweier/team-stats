@@ -41,7 +41,8 @@
     books: {},
     editing: null,        // schedule game being edited: id, "new", or null
     editingLineup: null,  // schedule game whose batting order a manager is setting
-    tossFor: null,        // Schedule: the game whose coin toss is being asked before Keep Score
+    tossFor: null,
+    fixingScore: null,    // game page: { id, runs } while fixing the other team's runs on an app-scored game        // Schedule: the game whose coin toss is being asked before Keep Score
     themeDraft: null,     // Team tab: colors an admin is previewing (not saved yet)
     linking: null,        // member a manager is linking to scorebook names (Team tab)
     links: [],            // scorebook name → member links (teams/{t}/links)
@@ -1834,10 +1835,55 @@
         h("td", { class: "r" }, r.r), h("td", null, r.h))))));
   }
 
+  /// Fixes the other team's runs on a game the app scored (the website only has its published summary).
+  async function saveOpponentRuns(id, runs) {
+    const fix = g => {
+      g.themByInning = runs;
+      g.them = runs.reduce((a, b) => a + b, 0);
+      if (g.isFinal) g.outcome = g.us > g.them ? "W" : g.us < g.them ? "L" : "T";
+      return g;
+    };
+    if (DEMO) { const g = state.games.find(x => x.id === id); if (g) fix(g); return; }
+    const doc = await getDoc(`teams/${state.key}/games/${encodeURIComponent(id)}`);
+    if (!doc?.json) throw new Error("That game isn't on the website anymore.");
+    await setDoc(`teams/${state.key}/games/${encodeURIComponent(id)}`, { json: JSON.stringify(fix(JSON.parse(doc.json))), updatedAt: now() },
+      { mask: ["json", "updatedAt"], exists: true });
+  }
+
+  function opponentRunsEditor(g) {
+    const n = Math.max(g.usByInning?.length || 0, g.themByInning?.length || 0, 1);
+    const d = state.fixingScore;
+    if (!d.runs) d.runs = Array.from({ length: n }, (_, i) => g.themByInning?.[i] || 0);
+    const set = (i, v) => { d.runs[i] = Math.max(0, Math.min(99, v)); render(); };
+    const total = d.runs.reduce((a, b) => a + b, 0);
+    return h("div", { class: "card pad fix-score" },
+      h("b", null, `${them(g)} runs by inning`),
+      d.runs.map((r, i) => h("div", { class: "opp-row" }, h("span", null, `Inning ${i + 1}`),
+        h("span", { class: "stepper" },
+          h("button", { type: "button", "aria-label": `One less run in inning ${i + 1}`, onclick: () => set(i, r - 1) }, "−"),
+          h("b", null, String(r)),
+          h("button", { type: "button", "aria-label": `One more run in inning ${i + 1}`, onclick: () => set(i, r + 1) }, "+")))),
+      h("div", { class: "opp-row" }, h("span", null, "Add an inning"),
+        h("span", { class: "stepper" }, h("button", { type: "button", "aria-label": "Add an inning", onclick: () => { d.runs.push(0); render(); } }, "+"))),
+      h("p", { class: "muted small" }, `Final: ${g.isHome ? `${them(g)} ${total} – ${us(g)} ${g.us}` : `${us(g)} ${g.us} – ${them(g)} ${total}`}. `
+        + "This game was scored in the Stat Book app: if it's changed there later, the app's copy replaces this fix."),
+      h("div", { class: "form-actions start" },
+        h("button", { class: "btn small", type: "button", onclick: action(async () => { await saveOpponentRuns(g.id, d.runs); state.fixingScore = null; }, { after: refreshNow }) }, "Save Score"),
+        h("button", { class: "btn small ghost", type: "button", onclick: () => { state.fixingScore = null; render(); } }, "Cancel")));
+  }
+
   function gameView(id) {
+    if (state.fixingScore && state.fixingScore.id !== id) state.fixingScore = null;
     const g = state.games.find(x => x.id === id);
     if (!g) return [h("a", { class: "back", href: "#/games" }, "‹ All games"), h("div", { class: "card empty", style: "margin-top:12px" }, "That game isn't on the website anymore.")];
     loadScored(g);
+    // Fixing a finished game: games scored here open in the scorer (every play is kept); the app's only have their summary.
+    const scoredHere = state.scored[g.id]?.game;
+    const canFix = g.isFinal && scorer?.isScorerHere();
+    const editBtn = !canFix || scoredHere === "loading" || scoredHere === undefined ? null
+      : scoredHere ? h("a", { class: "btn small", href: `#/score/${encodeURIComponent(g.id)}` }, "Edit Game")
+      : state.fixingScore?.id === g.id ? null
+      : h("button", { class: "btn small ghost", type: "button", onclick: () => { state.fixingScore = { id: g.id }; render(); } }, "Fix Opponent Score");
     const deleteBtn = isAdmin() && scorer ? h("button", { class: "btn small danger", type: "button", onclick: action(async () => {
       if (await scorer.confirmDeleteGame(state.key, g.id, title(g))) { location.hash = "#/games"; await refreshNow(); }
     }, { after: () => {} }) }, "Delete Game") : null;
@@ -1867,8 +1913,9 @@
           .flatMap((side, i) => (i ? [h("div", { class: "dash" }, "–"), side] : [side]))),
         h("div", { class: "date" }, `${title(g)} · ${fmtDate(g.date)}`)),
       g.isFinal ? null : liveCard(g),
-      h("h2", { class: "section" }, "Line Score"),
+      h("h2", { class: "section" }, "Line Score", editBtn),
       lineScore(g),
+      state.fixingScore?.id === g.id ? opponentRunsEditor(g) : null,
       h("h2", { class: "section" }, "Batting"),
       lines.length ? statsTable(BATTING, totals ? [...lines, totals] : lines) : h("div", { class: "card empty" }, "No at-bats yet."),
       (g.pitching || []).length ? [
