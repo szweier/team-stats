@@ -444,6 +444,7 @@ window.StatScorer = function (ctx) {
       can && !mine.length && !others.length && !scheduled.length ? h("div", { class: "card empty" },
         manager ? "No games being scored. Tap New Game, or set a lineup on a scheduled game." : "Nothing to score yet. Once a manager sets the lineup on today's game, it shows here.") : null,
       manager && !storageError ? importPanel() : null,
+      manager ? teamSnapPanel() : null,
       h("div", { class: "legend" }, "Every tap is saved on this phone first, then uploaded. If you lose signal, keep scoring: it uploads when you're back online. Adding this site to your Home Screen keeps your saved games safest."),
     ];
   }
@@ -545,6 +546,176 @@ window.StatScorer = function (ctx) {
         h("button", { class: "btn small", type: "button", disabled: !imp.chosen.size || imp.busy || null, onclick: runImport },
           imp.busy ? "Importing…" : `Import ${imp.chosen.size} Game${imp.chosen.size === 1 ? "" : "s"}`)) : null].flat(Infinity).filter(Boolean));
     return head;
+  }
+
+  // ---------- Import from a TeamSnap stats CSV (one row per player per game) ----------
+  // Columns: Team, Season, Player, Game ("vs. Hawks" / "at Hawks"), Date ("Tue, Sep 22, 2026"), then TeamSnap's
+  // stats (AB, 1B, 2B, 3B, HR, RBI, BB, R, H, SF, SO, HBP, GS, IP, ER, W, L…). Each game becomes a finished game
+  // summary like the ones the app publishes, so Games, Stats, Leaders and My Stats count it. There's no play by
+  // play, so no spray chart or scorebook. Our runs are the players' runs; theirs are the runs our pitchers gave up.
+  // Game ids come from the season, date and opponent, so importing the same file again replaces those games.
+
+  const tsImp = { rows: null, groups: [], chosen: new Set(), busy: false, done: null, error: null };
+
+  function parseCSV(text) {
+    const rows = [];
+    let row = [], cell = "", quoted = false;
+    text = text.replace(/^﻿/, "");
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+        else if (c === '"') quoted = false;
+        else cell += c;
+      } else if (c === '"') quoted = true;
+      else if (c === ",") { row.push(cell); cell = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); rows.push(row); row = []; cell = "";
+      } else cell += c;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    const [head, ...body] = rows.filter(r => r.some(c => c.trim()));
+    if (!head) return [];
+    const keys = head.map(k => k.trim());
+    return body.map(r => Object.fromEntries(keys.map((k, i) => [k, (r[i] || "").trim()])));
+  }
+
+  const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  /// "Tue, Sep 22, 2026" → "2026-09-22" (also takes 2026-09-22 and 9/22/2026).
+  function tsDate(s) {
+    let m = String(s).match(/([A-Za-z]{3})[a-z]*\.? (\d{1,2}),? (\d{4})/);
+    if (m && MONTHS[m[1].toLowerCase()]) return `${m[3]}-${String(MONTHS[m[1].toLowerCase()]).padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+    if ((m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/))) return m[0];
+    if ((m = String(s).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/))) return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+    return null;
+  }
+  const tsNum = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
+  /// Innings pitched → outs: TeamSnap writes 4.33 / 4.67 for a third / two thirds (4.1 / 4.2 also work).
+  function tsOuts(ip) {
+    const v = tsNum(ip), whole = Math.floor(v), f = v - whole;
+    return whole * 3 + (f < 0.01 ? 0 : f > 0.5 || Math.abs(f - 0.2) < 0.02 ? 2 : 1);
+  }
+  const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+  const LINE_FIELDS = ["pa", "ab", "r", "crr", "h", "b1", "b2", "b3", "hr", "rbi", "bb", "sf", "roe", "fc",
+                       "kl", "ks", "kf", "hro", "go", "fo", "lo", "po", "dp", "tp"];
+
+  /// The CSV rows for one Team + Season → published games for this team.
+  function teamSnapGames(rows, season) {
+    const games = new Map();
+    const seen = new Map();   // player + game → how many of that game they've had (doubleheaders)
+    for (const r of rows) {
+      const date = tsDate(r.Date);
+      if (!date || !r.Player || !r.Game) continue;
+      const base = `${date}|${r.Game.toLowerCase()}`;
+      const n = (seen.get(`${r.Player.toLowerCase()}|${base}`) || 0) + 1;
+      seen.set(`${r.Player.toLowerCase()}|${base}`, n);
+      const id = `ts-${slug(season)}-${date}-${slug(r.Game.replace(/^(vs\.?|at|@)\s+/i, ""))}-${n}`;
+      if (!games.has(id)) {
+        games.set(id, { id, date, team: state.team?.name || "", opponent: r.Game.replace(/^(vs\.?|at|@)\s+/i, "").trim(),
+          isFinal: true, isHome: !/^(at|@)\s/i.test(r.Game), event: season, eventKind: "season",
+          usByInning: [], themByInning: [], lines: [], spray: [], plays: [], pitching: [], source: "teamsnap" });
+      }
+      const g = games.get(id);
+      const hits = r.H !== "" ? tsNum(r.H) : tsNum(r["1B"]) + tsNum(r["2B"]) + tsNum(r["3B"]) + tsNum(r.HR);
+      const l = Object.fromEntries(LINE_FIELDS.map(f => [f, 0]));
+      Object.assign(l, { ab: tsNum(r.AB), r: tsNum(r.R), h: hits, b2: tsNum(r["2B"]), b3: tsNum(r["3B"]), hr: tsNum(r.HR),
+        rbi: tsNum(r.RBI), bb: tsNum(r.BB), sf: tsNum(r.SF), ks: tsNum(r.SO) });
+      l.b1 = r["1B"] !== "" && r["1B"] != null ? tsNum(r["1B"]) : Math.max(0, hits - l.b2 - l.b3 - l.hr);
+      l.pa = l.ab + l.bb + l.sf + tsNum(r.HBP);
+      if (l.pa > 0 || l.r > 0) g.lines.push({ name: r.Player, ...l });
+      const outs = tsOuts(r.IP);
+      if (outs > 0 || tsNum(r.GS) || tsNum(r.W) || tsNum(r.L)) {
+        g.pitching.push({ name: r.Player, outs, r: tsNum(r.ER), gs: tsNum(r.GS) ? 1 : 0, w: tsNum(r.W) ? 1 : 0, l: tsNum(r.L) ? 1 : 0 });
+      }
+    }
+    return [...games.values()].map(g => {
+      g.us = g.lines.reduce((s, l) => s + l.r, 0);
+      g.them = g.pitching.length ? g.pitching.reduce((s, p) => s + p.r, 0) : null;
+      g.outcome = g.pitching.some(p => p.w) ? "W" : g.pitching.some(p => p.l) ? "L"
+        : g.them == null ? undefined : g.us > g.them ? "W" : g.us < g.them ? "L" : "T";
+      g.totals = { name: "Team", ...Object.fromEntries(LINE_FIELDS.map(f => [f, g.lines.reduce((s, l) => s + l[f], 0)])) };
+      if (!g.pitching.length) delete g.pitching;
+      if (!g.outcome) delete g.outcome;
+      return g;
+    }).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async function readTeamSnap(file) {
+    Object.assign(tsImp, { rows: null, groups: [], chosen: new Set(), done: null, error: null });
+    try {
+      const rows = parseCSV(await file.text());
+      if (!rows.length || !["Season", "Player", "Game", "Date"].every(k => k in rows[0])) {
+        throw new Error("That isn't a TeamSnap stats file: it needs Season, Player, Game and Date columns.");
+      }
+      tsImp.rows = rows;
+      const by = new Map();
+      for (const r of rows) {
+        const key = `${r.Team || ""}|${r.Season}`;
+        if (!by.has(key)) by.set(key, { key, team: r.Team || "", season: r.Season, rows: [] });
+        by.get(key).rows.push(r);
+      }
+      tsImp.groups = [...by.values()].map(g => ({ ...g, games: teamSnapGames(g.rows, g.season) }))
+        .sort((a, b) => a.team.localeCompare(b.team) || b.games[0]?.date.localeCompare(a.games[0]?.date || "") || 0);
+      tsImp.chosen = new Set(tsImp.groups.filter(g => sameTeam(g.team, state.team?.name)).map(g => g.key));
+    } catch (e) {
+      tsImp.error = e.message || "Couldn't read that file.";
+    }
+    render();
+  }
+
+  async function runTeamSnapImport() {
+    tsImp.busy = true; tsImp.error = null; render();
+    const games = tsImp.groups.filter(g => tsImp.chosen.has(g.key)).flatMap(g => g.games.map(x => ({ ...x, team: state.team?.name || x.team })));
+    try {
+      if (DEMO) {
+        state.games = [...state.games.filter(x => !games.some(g => g.id === x.id)), ...games];
+      } else {
+        // Up to 400 games per all-or-nothing request.
+        for (let i = 0; i < games.length; i += 400) {
+          await fs("POST", `${DOCS}:commit`, { body: { writes: games.slice(i, i + 400).map(g => ({
+            update: { name: `${DOCS}/teams/${state.key}/games/${g.id}`,
+              fields: encFields({ json: JSON.stringify(g), date: g.date, updatedAt: Math.floor(Date.now() / 1000) }) } })) } });
+        }
+        await ctx.refreshNow();
+      }
+      tsImp.done = games.length;
+      tsImp.chosen = new Set();
+    } catch (e) {
+      tsImp.error = e instanceof ctx.Forbidden ? "Only the team's admins and managers can import games." : (e.message || "The import didn't finish.");
+    }
+    tsImp.busy = false;
+    render();
+  }
+
+  function teamSnapPanel() {
+    const team = state.team?.name || "this team";
+    const picker = h("input", { type: "file", accept: ".csv,text/csv", class: "file-input", "aria-label": "Choose the TeamSnap CSV",
+      onchange: e => { const f = e.target.files?.[0]; if (f) readTeamSnap(f); } });
+    const chosenGames = tsImp.groups.filter(g => tsImp.chosen.has(g.key)).reduce((s, g) => s + g.games.length, 0);
+    return h("details", { class: "fold import", open: tsImp.rows || tsImp.error || tsImp.done != null ? true : null },
+      h("summary", null, "Import stats from TeamSnap"),
+      h("p", { class: "muted small" }, `Pick a TeamSnap stats CSV (one row per player per game). Tick the seasons that are ${team}'s: each game comes in finished, with every player's batting and pitching, so it counts on the Games, Stats and My Stats pages. Importing the same file again replaces those games rather than adding them twice.`),
+      h("label", { class: "btn small ghost file-btn" }, "Choose CSV…", picker),
+      tsImp.error ? h("div", { class: "notice" }, tsImp.error) : null,
+      tsImp.done != null ? h("div", { class: "muted" }, `${tsImp.done} game${tsImp.done === 1 ? "" : "s"} imported.`) : null,
+      tsImp.groups.length ? [
+        h("div", { class: "k" }, "Seasons in the file"),
+        h("div", { class: "card lineup-list" }, tsImp.groups.map(g => {
+          const players = new Set(g.rows.map(r => r.Player)).size;
+          const w = g.games.filter(x => x.outcome === "W").length, l = g.games.filter(x => x.outcome === "L").length;
+          return h("label", { class: "lineup-row" },
+            h("span", { class: "lineup-check" },
+              h("input", { type: "checkbox", disabled: tsImp.busy || null, checked: tsImp.chosen.has(g.key) || null,
+                onchange: e => { e.target.checked ? tsImp.chosen.add(g.key) : tsImp.chosen.delete(g.key); render(); } }),
+              h("span", null, `${g.team || "No team"} · ${g.season}`,
+                h("span", { class: "muted small" }, ` · ${g.games.length} games (${w}-${l}) · ${players} players`))));
+        })),
+        h("p", { class: "muted small" }, "Our score is the runs our players scored; theirs is the runs our pitchers gave up, and the win or loss comes from TeamSnap's pitching. A doubleheader against the same team is split by the order of each player's games, so someone who sat out the first game can land in the wrong one. Seasons come in under TeamSnap's season names."),
+        h("div", { class: "form-actions start" },
+          h("button", { class: "btn small", type: "button", disabled: !chosenGames || tsImp.busy || null, onclick: runTeamSnapImport },
+            tsImp.busy ? "Importing…" : `Import ${chosenGames} Game${chosenGames === 1 ? "" : "s"} into ${team}`)),
+      ] : null);
   }
 
   /// "We bat first (Away)" / "We bat second (Home)"; `value` is true (home), false (away) or null (not picked yet).

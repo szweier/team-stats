@@ -1827,7 +1827,7 @@
 
   function liveCard(g) {
     const l = g.live || {};
-    const visitorsFirst = g.isHome ? [[them(g), g.them], [us(g), g.us]] : [[us(g), g.us], [them(g), g.them]];
+    const visitorsFirst = g.isHome ? [[them(g), g.them ?? "–"], [us(g), g.us]] : [[us(g), g.us], [them(g), g.them ?? "–"]];
     const runners = [["1st", l.first], ["2nd", l.second], ["3rd", l.third]].filter(([, n]) => n);
     return h("a", { class: "board live-card", href: `#/game/${encodeURIComponent(g.id)}`, style: "display:block;text-decoration:none" },
       h("div", { class: "live-top" },
@@ -1869,11 +1869,12 @@
   function gamesList() {
     const live = state.games.filter(g => !g.isFinal);
     const row = g => h("a", { class: "game-row", href: `#/game/${encodeURIComponent(g.id)}` },
-      h("span", { class: `badge ${g.isFinal ? (g.outcome || "T") : "LIVE"}` }, g.isFinal ? (g.outcome || "T") : "LIVE"),
+      // No result known (an imported game with no pitching): a plain badge, not a tie.
+      h("span", { class: `badge ${g.isFinal ? (g.outcome || "T") : "LIVE"}` }, g.isFinal ? (g.outcome || (g.them == null ? "–" : "T")) : "LIVE"),
       h("div", null,
         h("div", { class: "who" }, title(g)),
         h("div", { class: "when" }, [g.team, fmtDate(g.date)].filter(Boolean).join(" · "))),
-      h("span", { class: "sc" }, `${g.us}–${g.them}`),
+      h("span", { class: "sc" }, `${g.us}–${g.them ?? "?"}`),
       h("span", { class: "chev", "aria-hidden": "true" }, "›"));
     const list = games => h("div", { class: "card games", style: "gap:0;overflow:hidden" },
       games.map((g, i) => [i ? h("div", { style: "height:1px;background:var(--line);margin-left:66px" }) : null, row(g)]));
@@ -1909,7 +1910,7 @@
     const n = Math.max(g.usByInning?.length || 0, g.themByInning?.length || 0, 1);
     const innings = Array.from({ length: n }, (_, i) => i + 1);
     const usRow = { name: us(g), runs: g.usByInning || [], r: g.us, h: g.totals?.h ?? "–" };
-    const themRow = { name: them(g), runs: g.themByInning || [], r: g.them, h: "–" };
+    const themRow = { name: them(g), runs: g.themByInning || [], r: g.them ?? "–", h: "–" };
     const rows = g.isHome ? [themRow, usRow] : [usRow, themRow];
     return h("div", { class: "card scroll" }, h("table", { class: "stats line" },
       h("thead", null, h("tr", null, h("th", null, ""), innings.map(i => h("th", null, i)), h("th", { class: "r" }, "R"), h("th", null, "H"))),
@@ -1992,7 +1993,7 @@
       h("div", { class: "board game-head" },
         h("div", { class: "status" }, g.isFinal ? status : h("span", { class: "pill live" }, "Live")),
         // Visitors on the left, home team on the right.
-        h("div", { class: "teams" }, (g.isHome ? [[them(g), g.them], [us(g), g.us]] : [[us(g), g.us], [them(g), g.them]])
+        h("div", { class: "teams" }, (g.isHome ? [[them(g), g.them ?? "–"], [us(g), g.us]] : [[us(g), g.us], [them(g), g.them ?? "–"]])
           .map(([name, runs]) => h("div", null, h("div", { class: "tn" }, name), h("div", { class: "big" }, runs)))
           .flatMap((side, i) => (i ? [h("div", { class: "dash" }, "–"), side] : [side]))),
         h("div", { class: "date" }, `${title(g)} · ${fmtDate(g.date)}`)),
