@@ -60,10 +60,11 @@ body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
-/* Scrolls with the page, so the header always sits on the glow at the top. */
-body { min-height: 100vh; background: var(--backdrop); }
-/* The home screen app draws under the iPhone's status bar: that strip keeps the header's color while the page
-   scrolls beneath it. */
+/* Fills the whole screen (under the iPhone's status bar too) and stays put while the page scrolls: a fixed layer,
+   since iPhones ignore background-attachment: fixed. */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--backdrop); }
+/* The home screen app draws under the status bar: that strip shows the same stationary gradient, so the page
+   scrolls beneath it rather than behind the clock. */
 body::after { content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); z-index: 30;
   pointer-events: none; background: var(--board-1); }
 body:has(.lock)::after { background: color-mix(in srgb, var(--accent) 30%, var(--board-1)); }
