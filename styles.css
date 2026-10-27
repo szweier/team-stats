@@ -12,11 +12,12 @@
   --optic: #d9f23a;
   --board-1: #222621;
   --board-2: #121411;
-  /* Behind every page, in the team's colors: a glow of the main color over the page color. */
+  /* Behind every page, in the team's colors: a glow of the main color over the page color, top and bottom.
+     It ends in one even color (--backdrop-end) along the bottom, because a home screen app on an iPhone can leave
+     a strip at the very bottom that only the page's own background color reaches: the two then meet seamlessly. */
   --backdrop: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 62%),
-              radial-gradient(900px 420px at 50% calc(100% + 120px), color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 70%),
-              linear-gradient(var(--bg), var(--bg));
-  --backdrop-end: var(--bg);   /* the color at its bottom */
+              linear-gradient(var(--bg) 55%, var(--backdrop-end));
+  --backdrop-end: color-mix(in srgb, var(--accent) 12%, var(--bg));
   --win: #33a854;
   --loss: #db403d;
   --tie: #8a8f86;
@@ -44,10 +45,10 @@
     /* The same look as the sign-in and loading screens, carried on behind the page: a glow of the main color at
        the top (measured in pixels, so it's the same size on every screen), and the main color tinting the whole
        screen down to a softer glow at the bottom, so the team's colors reach all the way down. */
-    --backdrop: radial-gradient(900px 420px at 50% calc(100% + 120px), color-mix(in srgb, var(--accent) 24%, transparent) 0%, transparent 70%),
-                radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
-                linear-gradient(color-mix(in srgb, var(--accent) 16%, var(--board-1)), color-mix(in srgb, var(--accent) 10%, var(--board-2)));
-    --backdrop-end: color-mix(in srgb, var(--accent) 10%, var(--board-2));
+    --backdrop: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
+                linear-gradient(color-mix(in srgb, var(--accent) 16%, var(--board-1)),
+                                color-mix(in srgb, var(--accent) 10%, var(--board-2)) 60%, var(--backdrop-end));
+    --backdrop-end: color-mix(in srgb, var(--accent) 20%, var(--board-2));
   }
 }
 
@@ -63,10 +64,9 @@ body {
 }
 
 /* Fills the screen and stays put while the page scrolls: a fixed layer, since iPhones ignore
-   background-attachment: fixed. A home screen app drawn under the status bar can measure the screen short by the
-   status bar's height, so it reaches that much further down. */
-body::before { content: ""; position: fixed; inset: 0 0 calc(-1 * env(safe-area-inset-top)) 0; z-index: -1;
-  background: var(--backdrop); }
+   background-attachment: fixed. (A home screen app drawn under the status bar stops it short of the bottom by the
+   status bar's height whatever size it's given; the page's background color fills in there.) */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--backdrop); }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
