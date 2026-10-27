@@ -13,7 +13,7 @@
   --board-1: #222621;
   --board-2: #121411;
   /* Behind every page, in the team's colors: a glow of the main color over the page color. */
-  --backdrop: radial-gradient(1200px 640px at 50% -12%, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 62%),
+  --backdrop: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 62%),
               radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--board-1) 12%, transparent) 0%, transparent 60%),
               linear-gradient(var(--bg), var(--bg));
   --win: #33a854;
@@ -41,9 +41,11 @@
     --accent: #59b04a;
     --shadow: none;
     /* The same look as the sign-in and loading screens, carried on behind the page. */
-    --backdrop: radial-gradient(1200px 640px at 50% -12%, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
-                radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 60%),
-                linear-gradient(var(--board-1), var(--board-2) 40%);
+    /* The top of it (measured in pixels, so long pages match) also fills the strip under the status bar. */
+    --backdrop-top: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
+                    linear-gradient(var(--board-1), var(--board-2) 640px);
+    --backdrop: radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 60%),
+                var(--backdrop-top);
   }
 }
 
@@ -58,8 +60,14 @@ body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
-/* Stays put while the page scrolls (a fixed layer, since iPhones ignore background-attachment: fixed). */
-body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--backdrop); }
+/* Scrolls with the page, so the header always sits on the glow at the top. */
+body { min-height: 100vh; background: var(--backdrop); }
+/* The home screen app draws under the iPhone's status bar: that strip keeps the header's color while the page
+   scrolls beneath it. */
+body::after { content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); z-index: 30;
+  pointer-events: none; background: var(--board-1); }
+body:has(.lock)::after { background: color-mix(in srgb, var(--accent) 30%, var(--board-1)); }
+@media (prefers-color-scheme: dark) { body::after { background: var(--backdrop-top); } }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -602,7 +610,7 @@ details.fold.past summary { margin-bottom: 10px; }
 
 /* Between innings */
 .inning-break { position: fixed; inset: 0; z-index: 40; background: var(--backdrop); overflow-y: auto; }
-.ib-inner { max-width: 600px; margin: 0 auto; padding: 18px 16px calc(24px + env(safe-area-inset-bottom)); display: grid; gap: 14px; }
+.ib-inner { max-width: 600px; margin: 0 auto; padding: calc(18px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom)); display: grid; gap: 14px; }
 .due-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
 .due-row:first-of-type { border-top: 0; }
 .due-row i { font-style: normal; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; background: rgba(127, 127, 127, 0.15); font: 800 15px/1 var(--round); }
@@ -663,7 +671,7 @@ details.fold.past summary { margin-bottom: 10px; }
   .scorer { max-width: 1180px; }
   .scorer-body { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); column-gap: 24px; row-gap: 10px; align-content: start; }
   .scorer-body > * { grid-column: 2; }
-  .scorer-body > .tap-field { grid-column: 1; grid-row: 1 / span 12; align-self: start; max-height: calc(100dvh - 90px); position: sticky; top: 8px; }
+  .scorer-body > .tap-field { grid-column: 1; grid-row: 1 / span 12; align-self: start; max-height: calc(100dvh - 90px); position: sticky; top: calc(8px + env(safe-area-inset-top)); }
   .scorer-body > .tap-field.shrink { max-height: calc(100dvh - 90px); }
   .scorer-body > .hint { grid-column: 1; grid-row: 13; }
   .sheet { max-width: 760px; }
