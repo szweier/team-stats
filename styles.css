@@ -41,7 +41,7 @@
     --accent: #59b04a;
     --shadow: none;
     /* The same look as the sign-in and loading screens, carried on behind the page. */
-    /* The top of it (measured in pixels, so long pages match) also fills the strip under the status bar. */
+    /* The glow at the top, measured in pixels so it's the same size on every screen. */
     --backdrop-top: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
                     linear-gradient(var(--board-1), var(--board-2) 640px);
     --backdrop: radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 60%),
@@ -63,12 +63,6 @@ body {
 /* Fills the whole screen (under the iPhone's status bar too) and stays put while the page scrolls: a fixed layer,
    since iPhones ignore background-attachment: fixed. */
 body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--backdrop); }
-/* The home screen app draws under the status bar: that strip shows the same stationary gradient, so the page
-   scrolls beneath it rather than behind the clock. */
-body::after { content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top); z-index: 30;
-  pointer-events: none; background: var(--board-1); }
-body:has(.lock)::after { background: color-mix(in srgb, var(--accent) 30%, var(--board-1)); }
-@media (prefers-color-scheme: dark) { body::after { background: var(--backdrop-top); } }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
