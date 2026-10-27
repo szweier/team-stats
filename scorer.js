@@ -555,7 +555,7 @@ window.StatScorer = function (ctx) {
   // play, so no spray chart or scorebook. Our runs are the players' runs; theirs are the runs our pitchers gave up.
   // Game ids come from the season, date and opponent, so importing the same file again replaces those games.
 
-  const tsImp = { rows: null, groups: [], chosen: new Set(), busy: false, done: null, error: null };
+  const tsImp = { rows: null, groups: [], chosen: new Set(), busy: false, done: null, error: null, progress: null };
 
   function parseCSV(text) {
     const rows = [];
@@ -671,18 +671,34 @@ window.StatScorer = function (ctx) {
       if (DEMO) {
         state.games = [...state.games.filter(x => !games.some(g => g.id === x.id)), ...games];
       } else {
-        // Up to 400 games per all-or-nothing request.
-        for (let i = 0; i < games.length; i += 400) {
-          await fs("POST", `${DOCS}:commit`, { body: { writes: games.slice(i, i + 400).map(g => ({
+        // A few games per request, a moment apart: the database turns away big bursts of writes ("exceeded
+        // their maximum bandwidth"), so when it does, wait longer each time and try that batch again.
+        const SIZE = 10;
+        for (let i = 0; i < games.length; i += SIZE) {
+          tsImp.progress = `${i} of ${games.length}`; render();
+          const writes = games.slice(i, i + SIZE).map(g => ({
             update: { name: `${DOCS}/teams/${state.key}/games/${g.id}`,
-              fields: encFields({ json: JSON.stringify(g), date: g.date, updatedAt: Math.floor(Date.now() / 1000) }) } })) } });
+              fields: encFields({ json: JSON.stringify(g), date: g.date, updatedAt: Math.floor(Date.now() / 1000) }) } }));
+          for (let attempt = 0; ; attempt++) {
+            try { await fs("POST", `${DOCS}:commit`, { body: { writes } }); break; }
+            catch (e) {
+              const busy = /bandwidth|exhausted|too many|retry|backoff|unavailable|deadline/i.test(e.message || "") || e instanceof TypeError;
+              if (!busy || attempt >= 7) throw e;
+              tsImp.progress = `${i} of ${games.length} · the database is busy, trying again…`; render();
+              await new Promise(r => setTimeout(r, 1000 * 2 ** attempt + Math.random() * 500));
+            }
+          }
+          await new Promise(r => setTimeout(r, 400));
         }
+        tsImp.progress = null;
         await ctx.refreshNow();
       }
       tsImp.done = games.length;
       tsImp.chosen = new Set();
     } catch (e) {
-      tsImp.error = e instanceof ctx.Forbidden ? "Only the team's admins and managers can import games." : (e.message || "The import didn't finish.");
+      tsImp.error = e instanceof ctx.Forbidden ? "Only the team's admins and managers can import games."
+        : `${e.message || "The import didn't finish."} Games already sent are saved; import again to finish (nothing is added twice).`;
+      tsImp.progress = null;
     }
     tsImp.busy = false;
     render();
@@ -714,7 +730,7 @@ window.StatScorer = function (ctx) {
         h("p", { class: "muted small" }, "Our score is the runs our players scored; theirs is the runs our pitchers gave up, and the win or loss comes from TeamSnap's pitching. A doubleheader against the same team is split by the order of each player's games, so someone who sat out the first game can land in the wrong one. Seasons come in under TeamSnap's season names."),
         h("div", { class: "form-actions start" },
           h("button", { class: "btn small", type: "button", disabled: !chosenGames || tsImp.busy || null, onclick: runTeamSnapImport },
-            tsImp.busy ? "Importing…" : `Import ${chosenGames} Game${chosenGames === 1 ? "" : "s"} into ${team}`)),
+            tsImp.busy ? `Importing… ${tsImp.progress || ""}`.trim() : `Import ${chosenGames} Game${chosenGames === 1 ? "" : "s"} into ${team}`)),
       ] : null);
   }
 
