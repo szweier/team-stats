@@ -42,18 +42,18 @@
     --accent: #59b04a;
     --shadow: none;
     /* The same look as the sign-in and loading screens, carried on behind the page. */
-    /* The glow at the top, measured in pixels so it's the same size on every screen. */
-    --backdrop-top: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
-                    linear-gradient(var(--board-1), var(--board-2) 640px);
+    /* The glow at the top is measured in pixels so it's the same size on every screen; the rest fades down the
+       whole screen to the bottom. */
     --backdrop: radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 60%),
-                var(--backdrop-top);
+                radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
+                linear-gradient(var(--board-1), var(--board-2));
     --backdrop-end: var(--board-2);
   }
 }
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; background: var(--backdrop-end); min-height: 100%; }
+html { -webkit-text-size-adjust: 100%; background: var(--backdrop-end); }
 
 body {
   margin: 0;
@@ -62,12 +62,11 @@ body {
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 
-/* Fills the whole screen (under the iPhone's status bar too) and stays put while the page scrolls: a fixed layer,
-   since iPhones ignore background-attachment: fixed. */
-/* iPhones can measure the screen short of the status bar and home bar in a home screen app, so it reaches past
-   both, and anything still showing below is the gradient's bottom color. */
-body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; z-index: -1; background: var(--backdrop);
-  height: calc(100lvh + env(safe-area-inset-top) + env(safe-area-inset-bottom)); }
+/* Fills the screen and stays put while the page scrolls: a fixed layer, since iPhones ignore
+   background-attachment: fixed. A home screen app drawn under the status bar can measure the screen short by the
+   status bar's height, so it reaches that much further down. */
+body::before { content: ""; position: fixed; inset: 0 0 calc(-1 * env(safe-area-inset-top)) 0; z-index: -1;
+  background: var(--backdrop); }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
