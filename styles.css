@@ -16,6 +16,7 @@
   --backdrop: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 62%),
               radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--board-1) 12%, transparent) 0%, transparent 60%),
               linear-gradient(var(--bg), var(--bg));
+  --backdrop-end: var(--bg);   /* the color at its bottom */
   --win: #33a854;
   --loss: #db403d;
   --tie: #8a8f86;
@@ -46,12 +47,13 @@
                     linear-gradient(var(--board-1), var(--board-2) 640px);
     --backdrop: radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 60%),
                 var(--backdrop-top);
+    --backdrop-end: var(--board-2);
   }
 }
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; background: var(--bg); }
+html { -webkit-text-size-adjust: 100%; background: var(--backdrop-end); min-height: 100%; }
 
 body {
   margin: 0;
@@ -62,7 +64,10 @@ body {
 
 /* Fills the whole screen (under the iPhone's status bar too) and stays put while the page scrolls: a fixed layer,
    since iPhones ignore background-attachment: fixed. */
-body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--backdrop); }
+/* iPhones can measure the screen short of the status bar and home bar in a home screen app, so it reaches past
+   both, and anything still showing below is the gradient's bottom color. */
+body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; z-index: -1; background: var(--backdrop);
+  height: calc(100lvh + env(safe-area-inset-top) + env(safe-area-inset-bottom)); }
 
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
