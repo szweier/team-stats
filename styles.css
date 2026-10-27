@@ -14,7 +14,7 @@
   --board-2: #121411;
   /* Behind every page, in the team's colors: a glow of the main color over the page color. */
   --backdrop: radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, transparent) 0%, transparent 62%),
-              radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--board-1) 12%, transparent) 0%, transparent 60%),
+              radial-gradient(900px 420px at 50% calc(100% + 120px), color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 70%),
               linear-gradient(var(--bg), var(--bg));
   --backdrop-end: var(--bg);   /* the color at its bottom */
   --win: #33a854;
@@ -41,13 +41,13 @@
     --line: rgba(255, 255, 255, 0.08);
     --accent: #59b04a;
     --shadow: none;
-    /* The same look as the sign-in and loading screens, carried on behind the page. */
-    /* The glow at the top is measured in pixels so it's the same size on every screen; the rest fades down the
-       whole screen to the bottom. */
-    --backdrop: radial-gradient(900px 500px at 50% 112%, color-mix(in srgb, var(--accent) 14%, transparent) 0%, transparent 60%),
+    /* The same look as the sign-in and loading screens, carried on behind the page: a glow of the main color at
+       the top (measured in pixels, so it's the same size on every screen), and the main color tinting the whole
+       screen down to a softer glow at the bottom, so the team's colors reach all the way down. */
+    --backdrop: radial-gradient(900px 420px at 50% calc(100% + 120px), color-mix(in srgb, var(--accent) 24%, transparent) 0%, transparent 70%),
                 radial-gradient(1200px 640px at 50% -100px, color-mix(in srgb, var(--accent) 30%, var(--board-1)) 0%, transparent 62%),
-                linear-gradient(var(--board-1), var(--board-2));
-    --backdrop-end: var(--board-2);
+                linear-gradient(color-mix(in srgb, var(--accent) 16%, var(--board-1)), color-mix(in srgb, var(--accent) 10%, var(--board-2)));
+    --backdrop-end: color-mix(in srgb, var(--accent) 10%, var(--board-2));
   }
 }
 
