@@ -2269,6 +2269,101 @@
     ];
   }
 
+  // ---------- My Stats: the trend chart ----------
+
+  const TREND = [
+    { key: "avg", label: "AVG" }, { key: "obp", label: "OBP" }, { key: "slg", label: "SLG" }, { key: "ops", label: "OPS" },
+  ];
+  /// Which lines are showing (remembered on this device).
+  function trendShown() {
+    if (!state.myTrend) {
+      try { state.myTrend = JSON.parse(storage.get("statbook.mytrend") || "null"); } catch { state.myTrend = null; }
+      if (!state.myTrend || typeof state.myTrend !== "object") state.myTrend = { avg: true, obp: true, slg: true, ops: true };
+    }
+    return state.myTrend;
+  }
+
+  /// Your AVG / OBP / SLG / OPS after each game (running totals), oldest game first.
+  function myTrendChart(games, lines) {
+    const order = games.map((g, i) => i).sort((a, b) => (games[a].date || "").localeCompare(games[b].date || "") || String(games[a].id).localeCompare(String(games[b].id)));
+    const run = Object.fromEntries(FIELDS.map(f => [f, 0]));
+    const points = order.map(i => {
+      for (const f of FIELDS) run[f] += lines[i][f] || 0;
+      return { game: games[i], ...derive({ ...run }) };
+    });
+    const shown = trendShown();
+    const on = TREND.filter(t => shown[t.key]);
+    const toggle = t => h("button", { type: "button", class: `trend-chip s-${t.key}`, "aria-pressed": String(!!shown[t.key]),
+      onclick: () => { shown[t.key] = !shown[t.key]; storage.set("statbook.mytrend", JSON.stringify(shown)); render(); } },
+      h("span", { class: "trend-swatch", "aria-hidden": "true" }), t.label);
+
+    // Drawn at the size it shows, so its text stays readable on a phone.
+    const W = Math.round(Math.max(300, Math.min(940, (document.querySelector("main.wrap")?.clientWidth || window.innerWidth) - 66)));
+    const H = W < 500 ? 220 : 260, L = 40, R = 66, T = 14, B = 26;
+    const pw = W - L - R, ph = H - T - B, n = points.length;
+    const max = Math.max(0.5, ...on.flatMap(t => points.map(p => p[t.key])));
+    const step = max > 1.5 ? 0.5 : max > 0.8 ? 0.25 : 0.1;
+    const top = Math.ceil(max / step - 1e-9) * step;
+    const x = i => L + (n === 1 ? pw / 2 : (i * pw) / (n - 1));
+    const y = v => T + ph - (v / top) * ph;
+    const fmt = v => rate(v);
+    const ticks = Array.from({ length: Math.round(top / step) + 1 }, (_, i) => +(i * step).toFixed(3));
+    const grid = ticks.map(v => `<line class="trend-grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/>` +
+      `<text class="trend-tick" x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${fmt(v)}</text>`).join("");
+    const xLabels = [0, n - 1].filter((v, i, a) => a.indexOf(v) === i).map(i =>
+      `<text class="trend-tick" x="${x(i)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : "end"}">${fmtDate(points[i].game.date).replace(/[<&>]/g, "")}</text>`).join("");
+    const paths = on.map(t => `<path class="trend-line s-${t.key}" d="${points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[t.key]).toFixed(1)}`).join("")}"/>`).join("");
+    // Each line's latest value at its end, nudged apart so they never overlap.
+    const ends = on.map(t => ({ t, v: points[n - 1][t.key], y: y(points[n - 1][t.key]) })).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < ends.length; i++) ends[i].y = Math.max(ends[i].y, ends[i - 1].y + 13);
+    const endLabels = ends.map(e => `<circle class="trend-dot s-${e.t.key}" cx="${x(n - 1)}" cy="${y(e.v)}" r="3.5"/>` +
+      `<text class="trend-end" x="${x(n - 1) + 8}" y="${e.y + 4}">${e.t.label} ${fmt(e.v)}</text>`).join("");
+
+    const svg = h("div", { class: "trend-plot", svg: `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Your running AVG, OBP, SLG and OPS by game">` +
+      grid + xLabels + paths + endLabels +
+      `<line class="trend-cross" x1="0" x2="0" y1="${T}" y2="${T + ph}" visibility="hidden"/>` +
+      on.map(t => `<circle class="trend-hover s-${t.key}" r="4.5" cx="0" cy="0" visibility="hidden"/>`).join("") +
+      `<rect class="trend-hit" x="${L}" y="${T}" width="${pw}" height="${ph}" fill="transparent"/></svg>` });
+    const tip = h("div", { class: "trend-tip", role: "status", hidden: true });
+    const plot = h("div", { class: "trend-wrap" }, svg, tip);
+    // Hover / touch: snap to the nearest game and show every visible stat there.
+    const show = e => {
+      const box = plot.querySelector("svg").getBoundingClientRect();
+      const px = ((e.clientX - box.left) / box.width) * W;
+      const i = Math.max(0, Math.min(n - 1, Math.round(((px - L) / pw) * (n - 1))));
+      const p = points[i];
+      const cross = plot.querySelector(".trend-cross");
+      cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+      for (const t of on) {
+        const c = plot.querySelector(`.trend-hover.s-${t.key}`);
+        c.setAttribute("cx", x(i)); c.setAttribute("cy", y(p[t.key])); c.setAttribute("visibility", "visible");
+      }
+      tip.replaceChildren(
+        h("div", { class: "trend-tip-title" }, `${fmtDate(p.game.date)} · ${title(p.game)}`),
+        h("div", { class: "muted small" }, `After ${i + 1} game${i ? "s" : ""}: ${p.h}-for-${p.ab}`),
+        ...on.map(t => h("div", { class: "trend-tip-row" }, h("span", { class: `trend-swatch s-${t.key}`, "aria-hidden": "true" }), h("b", null, fmt(p[t.key])), h("span", null, t.label))));
+      tip.hidden = false;
+      const left = (x(i) / W) * box.width;
+      tip.style.left = `${Math.min(Math.max(left - tip.offsetWidth / 2, 0), box.width - tip.offsetWidth)}px`;
+    };
+    const hide = () => {
+      tip.hidden = true;
+      for (const el of plot.querySelectorAll(".trend-cross, .trend-hover")) el.setAttribute("visibility", "hidden");
+    };
+    if (on.length) {
+      plot.addEventListener("pointermove", show);
+      plot.addEventListener("pointerdown", show);
+      plot.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hide(); });   // a tap's readout stays up
+    }
+
+    return [
+      h("h2", { class: "section" }, "Over Time", h("span", { class: "rec" }, "running totals")),
+      h("div", { class: "card pad trend-card" },
+        h("div", { class: "trend-chips", role: "group", "aria-label": "Lines to show" }, TREND.map(toggle)),
+        on.length ? plot : h("div", { class: "muted trend-empty" }, "Turn on a stat above to see it over time.")),
+    ];
+  }
+
   function myStatsView() {
     const myTeams = state.profile?.teams || {};
     const teamCount = Object.keys(myTeams).length;
@@ -2363,6 +2458,7 @@
       controls,
       h("div", { class: "my-rates" },
         rateTile("AVG", total.avg), rateTile("OBP", total.obp), rateTile("SLG", total.slg), rateTile("OPS", total.ops)),
+      games.length > 1 ? myTrendChart(games, lines) : null,
       h("div", { class: "card my-counts" },
         countTile("G", total.g), countTile("PA", total.pa), countTile("AB", total.ab), countTile("H", total.h),
         countTile("2B", total.b2), countTile("3B", total.b3), countTile("HR", total.hr), countTile("R", total.r),

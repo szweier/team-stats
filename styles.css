@@ -743,3 +743,50 @@ h2.section.leaders-title { margin-top: 22px; }
 .leader-name { font: 700 15px/1.2 var(--round); width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .leader-value { font: 800 24px/1 var(--round); font-variant-numeric: tabular-nums; }
 .leader-card.first .leader-value { color: var(--accent); }
+
+/* ---------- My Stats: Over Time chart ---------- */
+
+/* Line colors (checked for color blindness against both page colors). */
+.trend-card {
+  --s-avg: #2a78d6; --s-obp: #eb6834; --s-slg: #1baf7a; --s-ops: #eda100;
+  display: grid; gap: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  .trend-card { --s-avg: #3987e5; --s-obp: #d95926; --s-slg: #199e70; --s-ops: #c98500; }
+}
+.trend-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.trend-chip {
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card-2); color: var(--muted); font: 800 13px/1 var(--round);
+}
+.trend-chip[aria-pressed="true"] { color: var(--text); border-color: var(--text); }
+.trend-chip[aria-pressed="false"] .trend-swatch { opacity: 0.25; }
+.trend-swatch { width: 14px; height: 3px; border-radius: 2px; background: currentColor; display: inline-block; }
+.s-avg .trend-swatch, .trend-swatch.s-avg { background: var(--s-avg); }
+.s-obp .trend-swatch, .trend-swatch.s-obp { background: var(--s-obp); }
+.s-slg .trend-swatch, .trend-swatch.s-slg { background: var(--s-slg); }
+.s-ops .trend-swatch, .trend-swatch.s-ops { background: var(--s-ops); }
+.trend-wrap { position: relative; touch-action: pan-y; }
+.trend-plot svg { display: block; width: 100%; height: auto; overflow: visible; }
+.trend-grid { stroke: var(--line); stroke-width: 1; }
+.trend-tick { fill: var(--muted); font: 600 11px/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.trend-end { fill: var(--text); font: 700 11px/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.trend-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-line.s-avg, .trend-dot.s-avg, .trend-hover.s-avg { stroke: var(--s-avg); }
+.trend-line.s-obp, .trend-dot.s-obp, .trend-hover.s-obp { stroke: var(--s-obp); }
+.trend-line.s-slg, .trend-dot.s-slg, .trend-hover.s-slg { stroke: var(--s-slg); }
+.trend-line.s-ops, .trend-dot.s-ops, .trend-hover.s-ops { stroke: var(--s-ops); }
+.trend-dot.s-avg, .trend-hover.s-avg { fill: var(--s-avg); }
+.trend-dot.s-obp, .trend-hover.s-obp { fill: var(--s-obp); }
+.trend-dot.s-slg, .trend-hover.s-slg { fill: var(--s-slg); }
+.trend-dot.s-ops, .trend-hover.s-ops { fill: var(--s-ops); }
+.trend-dot, .trend-hover { stroke: var(--card); stroke-width: 2; }
+.trend-cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.trend-tip {
+  position: absolute; top: 4px; min-width: 150px; padding: 8px 10px; border-radius: 10px; pointer-events: none;
+  background: var(--card-2); border: 1px solid var(--line); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18); font-size: 13px;
+}
+.trend-tip-title { font: 800 13px/1.2 var(--round); margin-bottom: 2px; }
+.trend-tip-row { display: flex; align-items: center; gap: 7px; margin-top: 3px; }
+.trend-tip-row b { font-variant-numeric: tabular-nums; min-width: 42px; }
+.trend-empty { padding: 20px 4px; text-align: center; }
