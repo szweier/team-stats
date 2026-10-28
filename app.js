@@ -492,7 +492,7 @@
   // Both go to the database (reports/, errors/), readable only in the Firebase console, so nobody's email is
   // shown to the whole site. Errors are sent automatically: each message once a visit, at most 5 a visit.
 
-  const VERSION = "v27";   // the cache name in sw.js; bump both together
+  const VERSION = "v28";   // the cache name in sw.js; bump both together
   const recentErrors = [];  // this visit's errors, also sent with a problem report
   let errorsSent = 0;
   const pageInfo = () => ({ page: location.hash || "#/", team: state.key || "", version: VERSION,

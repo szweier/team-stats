@@ -444,7 +444,7 @@ window.StatScorer = function (ctx) {
       can && !mine.length && !others.length && !scheduled.length ? h("div", { class: "card empty" },
         manager ? "No games being scored. Tap New Game, or set a lineup on a scheduled game." : "Nothing to score yet. Once a manager sets the lineup on today's game, it shows here.") : null,
       manager && !storageError ? importPanel() : null,
-      manager ? teamSnapPanel() : null,
+      manager ? csvPanel() : null,
       h("div", { class: "legend" }, "Every tap is saved on this phone first, then uploaded. If you lose signal, keep scoring: it uploads when you're back online. Adding this site to your Home Screen keeps your saved games safest."),
     ];
   }
@@ -548,8 +548,8 @@ window.StatScorer = function (ctx) {
     return head;
   }
 
-  // ---------- Import from a TeamSnap stats CSV (one row per player per game) ----------
-  // Columns: Team, Season, Player, Game ("vs. Hawks" / "at Hawks"), Date ("Tue, Sep 22, 2026"), then TeamSnap's
+  // ---------- Import from a stats CSV (one row per player per game) ----------
+  // Columns: Team, Season, Player, Game ("vs. Hawks" / "at Hawks"), Date ("Tue, Sep 22, 2026"), then the
   // stats (AB, 1B, 2B, 3B, HR, RBI, BB, R, H, SF, SO, HBP, GS, IP, ER, W, L…). Each game becomes a finished game
   // summary like the ones the app publishes, so Games, Stats, Leaders and My Stats count it. There's no play by
   // play, so no spray chart or scorebook. Our runs are the players' runs; theirs are the runs our pitchers gave up.
@@ -591,7 +591,7 @@ window.StatScorer = function (ctx) {
     return null;
   }
   const tsNum = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
-  /// Innings pitched → outs: TeamSnap writes 4.33 / 4.67 for a third / two thirds (4.1 / 4.2 also work).
+  /// Innings pitched → outs: 4.33 / 4.67 for a third / two thirds (4.1 / 4.2 also work).
   function tsOuts(ip) {
     const v = tsNum(ip), whole = Math.floor(v), f = v - whole;
     return whole * 3 + (f < 0.01 ? 0 : f > 0.5 || Math.abs(f - 0.2) < 0.02 ? 2 : 1);
@@ -601,7 +601,7 @@ window.StatScorer = function (ctx) {
                        "kl", "ks", "kf", "hro", "go", "fo", "lo", "po", "dp", "tp"];
 
   /// The CSV rows for one Team + Season → published games for this team.
-  function teamSnapGames(rows, season) {
+  function csvGames(rows, season) {
     const games = new Map();
     const seen = new Map();   // player + game → how many of that game they've had (doubleheaders)
     for (const r of rows) {
@@ -614,7 +614,7 @@ window.StatScorer = function (ctx) {
       if (!games.has(id)) {
         games.set(id, { id, date, team: state.team?.name || "", opponent: r.Game.replace(/^(vs\.?|at|@)\s+/i, "").trim(),
           isFinal: true, isHome: !/^(at|@)\s/i.test(r.Game), event: season, eventKind: "season",
-          usByInning: [], themByInning: [], lines: [], spray: [], plays: [], pitching: [], source: "teamsnap" });
+          usByInning: [], themByInning: [], lines: [], spray: [], plays: [], pitching: [], source: "csv" });
       }
       const g = games.get(id);
       const hits = r.H !== "" ? tsNum(r.H) : tsNum(r["1B"]) + tsNum(r["2B"]) + tsNum(r["3B"]) + tsNum(r.HR);
@@ -641,12 +641,12 @@ window.StatScorer = function (ctx) {
     }).sort((a, b) => a.date.localeCompare(b.date));
   }
 
-  async function readTeamSnap(file) {
+  async function readStatsCSV(file) {
     Object.assign(tsImp, { rows: null, groups: [], chosen: new Set(), done: null, error: null });
     try {
       const rows = parseCSV(await file.text());
       if (!rows.length || !["Season", "Player", "Game", "Date"].every(k => k in rows[0])) {
-        throw new Error("That isn't a TeamSnap stats file: it needs Season, Player, Game and Date columns.");
+        throw new Error("That isn't a stats CSV this can read: it needs Season, Player, Game and Date columns.");
       }
       tsImp.rows = rows;
       const by = new Map();
@@ -655,7 +655,7 @@ window.StatScorer = function (ctx) {
         if (!by.has(key)) by.set(key, { key, team: r.Team || "", season: r.Season, rows: [] });
         by.get(key).rows.push(r);
       }
-      tsImp.groups = [...by.values()].map(g => ({ ...g, games: teamSnapGames(g.rows, g.season) }))
+      tsImp.groups = [...by.values()].map(g => ({ ...g, games: csvGames(g.rows, g.season) }))
         .sort((a, b) => a.team.localeCompare(b.team) || b.games[0]?.date.localeCompare(a.games[0]?.date || "") || 0);
       tsImp.chosen = new Set(tsImp.groups.filter(g => sameTeam(g.team, state.team?.name)).map(g => g.key));
     } catch (e) {
@@ -664,7 +664,7 @@ window.StatScorer = function (ctx) {
     render();
   }
 
-  async function runTeamSnapImport() {
+  async function runCSVImport() {
     tsImp.busy = true; tsImp.error = null; render();
     const games = tsImp.groups.filter(g => tsImp.chosen.has(g.key)).flatMap(g => g.games.map(x => ({ ...x, team: state.team?.name || x.team })));
     try {
@@ -704,14 +704,14 @@ window.StatScorer = function (ctx) {
     render();
   }
 
-  function teamSnapPanel() {
+  function csvPanel() {
     const team = state.team?.name || "this team";
-    const picker = h("input", { type: "file", accept: ".csv,text/csv", class: "file-input", "aria-label": "Choose the TeamSnap CSV",
-      onchange: e => { const f = e.target.files?.[0]; if (f) readTeamSnap(f); } });
+    const picker = h("input", { type: "file", accept: ".csv,text/csv", class: "file-input", "aria-label": "Choose the stats CSV",
+      onchange: e => { const f = e.target.files?.[0]; if (f) readStatsCSV(f); } });
     const chosenGames = tsImp.groups.filter(g => tsImp.chosen.has(g.key)).reduce((s, g) => s + g.games.length, 0);
     return h("details", { class: "fold import", open: tsImp.rows || tsImp.error || tsImp.done != null ? true : null },
-      h("summary", null, "Import stats from TeamSnap"),
-      h("p", { class: "muted small" }, `Pick a TeamSnap stats CSV (one row per player per game). Tick the seasons that are ${team}'s: each game comes in finished, with every player's batting and pitching, so it counts on the Games, Stats and My Stats pages. Importing the same file again replaces those games rather than adding them twice.`),
+      h("summary", null, "Import stats from a CSV"),
+      h("p", { class: "muted small" }, `Pick a stats CSV (one row per player per game). Tick the seasons that are ${team}'s: each game comes in finished, with every player's batting and pitching, so it counts on the Games, Stats and My Stats pages. Importing the same file again replaces those games rather than adding them twice.`),
       h("label", { class: "btn small ghost file-btn" }, "Choose CSV…", picker),
       tsImp.error ? h("div", { class: "notice" }, tsImp.error) : null,
       tsImp.done != null ? h("div", { class: "muted" }, `${tsImp.done} game${tsImp.done === 1 ? "" : "s"} imported.`) : null,
@@ -727,9 +727,9 @@ window.StatScorer = function (ctx) {
               h("span", null, `${g.team || "No team"} · ${g.season}`,
                 h("span", { class: "muted small" }, ` · ${g.games.length} games (${w}-${l}) · ${players} players`))));
         })),
-        h("p", { class: "muted small" }, "Our score is the runs our players scored; theirs is the runs our pitchers gave up, and the win or loss comes from TeamSnap's pitching. A doubleheader against the same team is split by the order of each player's games, so someone who sat out the first game can land in the wrong one. Seasons come in under TeamSnap's season names."),
+        h("p", { class: "muted small" }, "Our score is the runs our players scored; theirs is the runs our pitchers gave up, and the win or loss comes from the pitchers' wins and losses. A doubleheader against the same team is split by the order of each player's games, so someone who sat out the first game can land in the wrong one. Seasons come in under the names in the file."),
         h("div", { class: "form-actions start" },
-          h("button", { class: "btn small", type: "button", disabled: !chosenGames || tsImp.busy || null, onclick: runTeamSnapImport },
+          h("button", { class: "btn small", type: "button", disabled: !chosenGames || tsImp.busy || null, onclick: runCSVImport },
             tsImp.busy ? `Importing… ${tsImp.progress || ""}`.trim() : `Import ${chosenGames} Game${chosenGames === 1 ? "" : "s"} into ${team}`)),
       ] : null);
   }
