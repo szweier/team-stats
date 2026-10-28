@@ -2061,19 +2061,32 @@
 
   // ---------- Leaders (top five in each category) ----------
 
-  /// Best Offensive Player: every batting category counts the same. Each player's number in each category is
-  /// compared with the team's (how many spreads above or below the team average it is), and those are averaged,
-  /// strikeouts counting against. Shown as a rating where 50 is the team's average hitter.
-  const OFFENSE = ["avg", "obp", "slg", "ops", "h", "b2", "b3", "hr", "tb", "rbi", "r", "bb", "k"];
+  /// Best Offensive Player: each player's number in each category is compared with the team's (how many
+  /// spreads above or below the team average it is), then weighted by how much it wins games: getting on base and
+  /// hitting for power most, then driving in and scoring runs, with the rest as tie-breakers. Counting stats are
+  /// per game or per plate appearance, so a missed game doesn't sink a strong hitter. (OPS is left out: it's
+  /// OBP + SLG again.) Shown as a rating where 50 is the team's average hitter.
+  const OFFENSE = [
+    { label: "OBP", weight: 24, of: r => r.obp },
+    { label: "SLG", weight: 24, of: r => r.slg },
+    { label: "RBI a game", weight: 12, of: r => (r.g ? r.rbi / r.g : 0) },
+    { label: "AVG", weight: 10, of: r => r.avg },
+    { label: "runs a game", weight: 10, of: r => (r.g ? r.r / r.g : 0) },
+    { label: "home runs", weight: 6, of: r => (r.pa ? r.hr / r.pa : 0) },
+    { label: "strikeouts", weight: -6, of: r => (r.pa ? r.k / r.pa : 0) },
+    { label: "doubles and triples", weight: 4, of: r => (r.pa ? (r.b2 + r.b3) / r.pa : 0) },
+    { label: "walks", weight: 4, of: r => (r.pa ? r.bb / r.pa : 0) },
+  ];
+  const OFFENSE_TOTAL = OFFENSE.reduce((s, c) => s + Math.abs(c.weight), 0);
   function offenseRatings(rows) {
-    const spread = OFFENSE.map(f => {
-      const vals = rows.map(r => r[f]);
+    const spread = OFFENSE.map(c => {
+      const vals = rows.map(c.of);
       const mean = vals.reduce((s, v) => s + v, 0) / vals.length;
       const sd = Math.sqrt(vals.reduce((s, v) => s + (v - mean) ** 2, 0) / vals.length);
-      return { f, mean, sd };
+      return { ...c, mean, sd };
     });
     return rows.map(r => {
-      const z = spread.reduce((sum, { f, mean, sd }) => sum + (sd ? ((r[f] - mean) / sd) * (f === "k" ? -1 : 1) : 0), 0) / OFFENSE.length;
+      const z = spread.reduce((sum, c) => sum + (c.sd ? ((c.of(r) - c.mean) / c.sd) * c.weight : 0), 0) / OFFENSE_TOTAL;
       return { ...r, rating: Math.round(50 + 15 * z) };
     });
   }
@@ -2145,7 +2158,7 @@
       ...LEADERS.flatMap(cat => leaderRow(cat, cat.rated ? rated : cat.qualified ? qualified : batters)),
       ...PITCH_LEADERS.flatMap(cat => leaderRow(cat, cat.qualified ? arms : pitchers)),
       h("div", { class: "legend" },
-        `Best Offensive Player weighs every batting category equally (AVG, OBP, SLG, OPS, hits, doubles, triples, home runs, total bases, RBI, runs and walks, with strikeouts counting against) against the rest of the team: 50 is the team's average hitter. It and the averages count players with at least 2 plate appearances a game (${2 * teamGames} so far)${regular.length ? "" : "; nobody has that many yet, so everyone counts for now"}. ERA counts pitchers with an inning a game.`),
+        `Best Offensive Player compares each hitter with the rest of the team, weighting what wins games most: ${OFFENSE.map(c => `${c.label} ${Math.abs(c.weight)}%`).join(", ")} (strikeouts count against; RBI and runs are per game, the others per plate appearance, so a missed game doesn't count against anyone). 50 is the team's average hitter. It and the averages count players with at least 2 plate appearances a game (${2 * teamGames} so far)${regular.length ? "" : "; nobody has that many yet, so everyone counts for now"}. ERA counts pitchers with an inning a game.`),
     ];
   }
 
