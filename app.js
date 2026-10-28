@@ -2042,20 +2042,21 @@
     const team = teams.includes(state.statsTeam) ? state.statsTeam : "";
     const games = state.games.filter(g => (!team || g.team === team) && inEvent(g));
     const finals = games.filter(g => g.isFinal).length;
-    const mode = state.statsMode === "table" ? "table" : "leaders";
+    const mode = ["table", "trends"].includes(state.statsMode) ? state.statsMode : "leaders";
     const modeBtn = (key, label) => h("button", { class: `seg-btn stats-mode${mode === key ? " on" : ""}`, type: "button",
       "aria-pressed": String(mode === key), onclick: () => { state.statsMode = key; render(); } }, label);
     return [
       h("h2", { class: "section" }, currentEventLabel() || "Season Stats",
         h("span", { class: "rec" }, `${record(games)} · ${finals} game${finals === 1 ? "" : "s"}`)),
       h("div", { class: "controls" },
-        h("div", { class: "seg stats-modes", role: "group", "aria-label": "Show" }, modeBtn("leaders", "Leaders"), modeBtn("table", "All Players")),
+        h("div", { class: "seg stats-modes", role: "group", "aria-label": "Show" },
+          modeBtn("leaders", "Leaders"), modeBtn("table", "All Players"), modeBtn("trends", "Over Time")),
         teams.length > 1
           ? h("select", { class: "control", "aria-label": "Team", onchange: e => { state.statsTeam = e.target.value; render(); } },
               h("option", { value: "" }, "All teams"),
               teams.map(t => { const o = h("option", { value: t }, t); if (t === team) o.selected = true; return o; }))
           : null),
-      ...(mode === "leaders" ? leadersSection(games) : statsTableSection(games)),
+      ...(mode === "leaders" ? leadersSection(games) : mode === "trends" ? trendsSection(games) : statsTableSection(games)),
     ];
   }
 
@@ -2159,6 +2160,32 @@
       ...PITCH_LEADERS.flatMap(cat => leaderRow(cat, cat.qualified ? arms : pitchers)),
       h("div", { class: "legend" },
         `Best Offensive Player compares each hitter with the rest of the team, weighting what wins games most: ${OFFENSE.map(c => `${c.label} ${Math.abs(c.weight)}%`).join(", ")} (strikeouts count against; RBI and runs are per game, the others per plate appearance, so a missed game doesn't count against anyone). 50 is the team's average hitter. It and the averages count players with at least 2 plate appearances a game (${2 * teamGames} so far)${regular.length ? "" : "; nobody has that many yet, so everyone counts for now"}. ERA counts pitchers with an inning a game.`),
+    ];
+  }
+
+  /// Stats → Over Time: pick any player and see their running averages game by game.
+  function trendsSection(games) {
+    const keyOf = l => (l.member ? `m:${l.member}` : `n:${String(l.name || "").trim().toLowerCase()}`);
+    const people = new Map();
+    for (const g of games) for (const l of g.lines || []) if (counts(l)) people.set(keyOf(l), String(l.name || "").trim());
+    if (!people.size) return [h("div", { class: "card empty" }, "No stats yet.")];
+    const sorted = [...people.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    // You first if you're in there, else the first name.
+    const mineKey = [...people.keys()].find(k => k === `m:${me()}`) || sorted.find(([, n]) => isMine({ name: n }))?.[0];
+    const key = people.has(state.trendPlayer) ? state.trendPlayer : mineKey || sorted[0][0];
+    const played = [], lines = [];
+    for (const g of games) {
+      const ls = (g.lines || []).filter(l => keyOf(l) === key && counts(l));
+      if (!ls.length) continue;
+      played.push(g);
+      lines.push(Object.fromEntries(FIELDS.map(f => [f, ls.reduce((s, l) => s + (l[f] || 0), 0)])));
+    }
+    const pick = h("select", { class: "control", "aria-label": "Player", onchange: e => { state.trendPlayer = e.target.value; render(); } },
+      sorted.map(([k, n]) => { const o = h("option", { value: k }, n); if (k === key) o.selected = true; return o; }));
+    return [
+      h("div", { class: "controls" }, pick),
+      played.length > 1 ? trendChart(played, lines, people.get(key))
+        : h("div", { class: "card empty" }, `${people.get(key)} has only played one game here, so there's nothing to chart yet.`),
     ];
   }
 
@@ -2283,8 +2310,9 @@
     return state.myTrend;
   }
 
-  /// Your AVG / OBP / SLG / OPS after each game (running totals), oldest game first.
-  function myTrendChart(games, lines) {
+  /// A player's AVG / OBP / SLG / OPS after each game (running totals), oldest game first: `lines[i]` is
+  /// their line in `games[i]`. Used for you on My Stats and for anyone on Stats → Over Time.
+  function trendChart(games, lines, heading = "Over Time") {
     const order = games.map((g, i) => i).sort((a, b) => (games[a].date || "").localeCompare(games[b].date || "") || String(games[a].id).localeCompare(String(games[b].id)));
     const run = Object.fromEntries(FIELDS.map(f => [f, 0]));
     const points = order.map(i => {
@@ -2319,7 +2347,7 @@
     const endLabels = ends.map(e => `<circle class="trend-dot s-${e.t.key}" cx="${x(n - 1)}" cy="${y(e.v)}" r="3.5"/>` +
       `<text class="trend-end" x="${x(n - 1) + 8}" y="${e.y + 4}">${e.t.label} ${fmt(e.v)}</text>`).join("");
 
-    const svg = h("div", { class: "trend-plot", svg: `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Your running AVG, OBP, SLG and OPS by game">` +
+    const svg = h("div", { class: "trend-plot", svg: `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Running AVG, OBP, SLG and OPS by game">` +
       grid + xLabels + paths + endLabels +
       `<line class="trend-cross" x1="0" x2="0" y1="${T}" y2="${T + ph}" visibility="hidden"/>` +
       on.map(t => `<circle class="trend-hover s-${t.key}" r="4.5" cx="0" cy="0" visibility="hidden"/>`).join("") +
@@ -2357,7 +2385,7 @@
     }
 
     return [
-      h("h2", { class: "section" }, "Over Time", h("span", { class: "rec" }, "running totals")),
+      h("h2", { class: "section" }, heading, h("span", { class: "rec" }, "running totals")),
       h("div", { class: "card pad trend-card" },
         h("div", { class: "trend-chips", role: "group", "aria-label": "Lines to show" }, TREND.map(toggle)),
         on.length ? plot : h("div", { class: "muted trend-empty" }, "Turn on a stat above to see it over time.")),
@@ -2458,7 +2486,7 @@
       controls,
       h("div", { class: "my-rates" },
         rateTile("AVG", total.avg), rateTile("OBP", total.obp), rateTile("SLG", total.slg), rateTile("OPS", total.ops)),
-      games.length > 1 ? myTrendChart(games, lines) : null,
+      games.length > 1 ? trendChart(games, lines) : null,
       h("div", { class: "card my-counts" },
         countTile("G", total.g), countTile("PA", total.pa), countTile("AB", total.ab), countTile("H", total.h),
         countTile("2B", total.b2), countTile("3B", total.b3), countTile("HR", total.hr), countTile("R", total.r),
