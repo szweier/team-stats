@@ -2292,8 +2292,8 @@
 
     const years = [...new Set(pool.map(yearOf).filter(Boolean))];
     // The season picked in the header (a year only matters for "All seasons"). It's this team's, so another
-    // team on its own shows all its seasons, broken down below.
-    const event = other ? "" : currentEvent();
+    // team, or all of them, shows every season, broken down below.
+    const event = scope ? "" : currentEvent();
     const year = !event && years.includes(state.myYear) ? state.myYear : "";
     const inYear = pool.filter(g => !year || yearOf(g) === year);
     const events = eventsOf(inYear);
@@ -2332,12 +2332,14 @@
     const countTile = (label, value) => h("div", null, h("b", null, value), h("span", null, label));
 
     // Breakdown by season / tournament, or by year when no game has one.
-    const groupOf = events.length ? g => (g.event ? eventLabel({ name: g.event, kind: g.eventKind }) : "No season") : yearOf;
+    const seasonOf = events.length ? g => (g.event ? eventLabel({ name: g.event, kind: g.eventKind }) : "No season") : yearOf;
+    // All my teams: each team's seasons on their own rows.
+    const groupOf = all ? g => [g.isSolo ? "Tracked" : g.team, seasonOf(g)].filter(Boolean).join(" · ") : seasonOf;
     const groups = new Map();
     games.forEach((g, i) => { const k = groupOf(g); groups.set(k, [...(groups.get(k) || []), lines[i]]); });
     const breakdown = [...groups.entries()].map(([k, ls]) => sumLines(k, ls));
     if (breakdown.length > 1) breakdown.push(Object.assign(sumLines("Total", lines), { _total: true }));
-    const columns = [{ key: "name", label: events.length ? "Season" : "Year" }, { key: "g", label: "G", title: "Games" }, ...BATTING.slice(1)];
+    const columns = [{ key: "name", label: all ? "Team · Season" : events.length ? "Season" : "Year" }, { key: "g", label: "G", title: "Games" }, ...BATTING.slice(1)];
 
     const here = new Set(state.games.map(g => g.id));
     const logRows = games.map((g, i) => ({ ...derive(lines[i]), game: g }));
