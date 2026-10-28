@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Getting Started · Team Stats</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    .policy { max-width: 720px; margin: 0 auto; padding: 32px 16px 60px; }
+    .policy h1 { font: 800 30px/1.15 var(--round); margin: 0 0 4px; }
+    .policy h2 { font: 800 21px/1.3 var(--round); margin: 36px 0 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .policy h3 { font: 800 16px/1.3 var(--round); margin: 20px 0 6px; }
+    .policy p, .policy li { color: var(--text); }
+    .policy li { margin: 4px 0; }
+    .policy .muted { color: var(--muted); }
+    .policy .toc { display: grid; gap: 4px; padding: 14px 16px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--line); }
+    .policy .tip { padding: 10px 14px; border-radius: 12px; background: var(--card); border: 1px solid var(--line); }
+    .policy code { font: 600 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--card-2); padding: 1px 5px; border-radius: 6px; }
+    .policy table { border-collapse: collapse; width: 100%; font-size: 15px; }
+    .policy th, .policy td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .policy .beta { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--optic); color: #111;
+      font: 800 11px/1.3 var(--round); letter-spacing: 0.08em; text-transform: uppercase; vertical-align: middle; }
+  </style>
+</head>
+<body>
+  <main class="policy">
+    <p><a href="./">‹ Back to Team Stats</a></p>
+    <h1>Getting Started</h1>
+    <p class="muted">Team Stats <span class="beta">Beta</span> · your team's schedule, availability, scorekeeping and stats in one place</p>
+
+    <nav class="toc" aria-label="Contents">
+      <a href="#start">1. Get it on your phone and sign in</a>
+      <a href="#captains">2. Captains: set up your team</a>
+      <a href="#schedule">3. Schedule and who's coming</a>
+      <a href="#score">4. Keeping score</a>
+      <a href="#names">5. Making sure stats land on the right player</a>
+      <a href="#stats">6. Reading the stats</a>
+      <a href="#help">7. Beta, problems and contact</a>
+    </nav>
+
+    <h2 id="start">1. Get it on your phone and sign in</h2>
+    <h3>Sign in (no password)</h3>
+    <ol>
+      <li>Open the team's invite link from your captain (or the website), and enter your email.</li>
+      <li>Open the sign-in email and tap the link. You're in. The same link creates your account the first time.</li>
+      <li>Add your name: it's what teammates see on the schedule and in the stats.</li>
+    </ol>
+    <p class="tip">No email? Give it a minute and check spam. If you asked twice, use the newest email: older links stop working.</p>
+
+    <h3>Add it to your home screen (recommended)</h3>
+    <ul>
+      <li><b>iPhone:</b> in Safari tap Share → <b>Add to Home Screen</b>.</li>
+      <li><b>Android:</b> in Chrome tap ⋮ → <b>Add to Home screen</b> (or Install app).</li>
+    </ul>
+    <p>The home screen app keeps its own sign-in. The first time you open it, enter your email there and tap the link
+      in the email: it opens in Safari, which signs in, then switch back to the home screen app and it signs itself
+      in within a few seconds.</p>
+
+    <h2 id="captains">2. Captains: set up your team</h2>
+    <h3>Start the team</h3>
+    <p>During the beta, starting teams is invite-only. Once we've added you, sign in and tap <b>Start a new team</b>
+      on your home screen, name it, and you're its admin. (Already keep the team in the Slow Pitch Book iPhone app? Use
+      <b>Have a team in the Stat Book app?</b> with the team's scorer code instead, and its games come with it.)</p>
+
+    <h3>Invite your teammates</h3>
+    <p>Team tab → <b>Invite teammates</b> → <b>Copy Link</b> or <b>Share…</b>, then send it to the team (group text
+      works well). Anyone with the link can join, so if it gets around, tap <b>New Link</b> and the old one stops
+      working.</p>
+
+    <h3>Give people roles</h3>
+    <p>On the Team tab, each player has a role menu:</p>
+    <table>
+      <tr><th>Role</th><th>Can do</th></tr>
+      <tr><td><b>Admin</b></td><td>Everything: players and roles, invites, team colors, linking names, deleting games or the team.</td></tr>
+      <tr><td><b>Manager</b></td><td>The schedule, lineups, keeping score and importing stats.</td></tr>
+      <tr><td><b>Scheduler</b></td><td>Add and edit games on the schedule.</td></tr>
+      <tr><td><b>Scorekeeper</b></td><td>Keep score of a game once a manager has set its lineup.</td></tr>
+      <tr><td><b>Player</b></td><td>Answer "Can you make it?" and see the schedule and stats.</td></tr>
+    </table>
+    <p>Every player can see the stats; roles only decide who can change things. Keep at least one other admin or
+      manager in case you're away.</p>
+
+    <h3>Team colors (admins)</h3>
+    <p>Team tab → <b>Team colors</b>: pick a preset or your own main, highlight and background colors. The whole site
+      takes them on for your team.</p>
+
+    <h3>Bring in past stats from a CSV (optional)</h3>
+    <p>Games → <b>Keep Score</b> → <b>Import stats from a CSV</b> (admins and managers). Pick the file, tick the
+      seasons that belong to this team, and tap Import. Each game comes in finished and counts everywhere in the stats.
+      Importing the same file again replaces those games instead of doubling them.</p>
+    <p>The file needs one row per player per game with these columns:</p>
+    <ul>
+      <li><code>Team</code>, <code>Season</code> (e.g. Fall 2026), <code>Player</code>, <code>Game</code>
+        (<code>vs. Hawks</code> for home, <code>at Hawks</code> for away), <code>Date</code>
+        (e.g. <code>Tue, Sep 22, 2026</code>, <code>2026-09-22</code> or <code>9/22/2026</code>).</li>
+      <li>Batting: <code>AB</code> <code>1B</code> <code>2B</code> <code>3B</code> <code>HR</code> <code>RBI</code>
+        <code>BB</code> <code>R</code> <code>H</code> <code>SF</code> <code>SO</code> <code>HBP</code>.
+        Pitching: <code>GS</code> <code>IP</code> <code>ER</code> <code>W</code> <code>L</code>. Missing or blank stats count as zero.</li>
+    </ul>
+    <p class="tip">Our score is the runs our players scored; theirs is the runs our pitchers gave up, and the win or
+      loss comes from the pitchers' W and L. Two games against the same team on the same day are split by the order of
+      each player's rows. You can fix any imported score afterwards with <b>Fix Opponent Score</b> on the game.</p>
+
+    <h2 id="schedule">3. Schedule and who's coming</h2>
+    <ul>
+      <li><b>Add games:</b> Schedule → <b>+ Add Game</b> (admins, managers and schedulers): date, time, opponent,
+        field and notes. <b>Drop a Pin on the Map</b> gives everyone Apple Maps, Google Maps and Waze directions.</li>
+      <li><b>Can you make it?</b> Everyone taps <b>In</b>, <b>Maybe</b> or <b>Out</b> on each game. The counts and
+        <b>Who's coming</b> show the captain who'll be there.</li>
+      <li><b>Lineup:</b> <b>Set Lineup</b> on a game (admins and managers) to pick the batting order from who's coming.
+        That also lets a scorekeeper score it.</li>
+    </ul>
+    <p>Home or away isn't set ahead of time: you pick who bats first after the coin toss, when you start keeping score.</p>
+
+    <h2 id="score">4. Keeping score</h2>
+    <ol>
+      <li>On the game day, tap <b>Keep Score</b> on the scheduled game (or Games → Keep Score → <b>+ New Game</b>).</li>
+      <li>Pick who bats first from the coin toss and the starting pitcher.</li>
+      <li>Tap what happened on each play. The field shows the runners, outs and count, and you can change the
+        pitcher at any inning break.</li>
+      <li>Tap <b>End Game</b> when it's over.</li>
+    </ol>
+    <ul>
+      <li><b>No signal at the field?</b> Keep going. Every tap is saved on the phone first and uploads when you're
+        back online. Using the home screen app keeps those saved games safest.</li>
+      <li><b>Live for the team:</b> while you score, teammates see the live score, inning, outs and who's up on the
+        Games tab.</li>
+      <li><b>Two phones on one game:</b> only one phone should score a game. If two do, the second is told and
+        chooses which version to keep, so nothing is silently lost.</li>
+      <li><b>Mistakes:</b> fix a finished game with <b>Edit Game</b> on its page; for app-scored or imported games
+        use <b>Fix Opponent Score</b>.</li>
+      <li><b>Just tracking yourself?</b> My Stats → <b>Tracked Players</b> → <b>+ Track One Player</b> records one
+        player's at-bats (yours or your kid's on another team). Only you see them.</li>
+    </ul>
+
+    <h2 id="names">5. Making sure stats land on the right player</h2>
+    <p>Stats are kept under the name the scorer typed. To make them count as a teammate's (so they show in that
+      person's My Stats and follow them if they change their name), an admin links the two:</p>
+    <ul>
+      <li><b>Link:</b> Team tab → the player → <b>Link</b>, then pick the name(s) they were scored under.
+        <b>Link More</b> adds another name; <b>Unlink</b> undoes links made here.</li>
+      <li><b>Same name:</b> a scorebook name that exactly matches someone's account name counts as them automatically.</li>
+      <li><b>Typos and duplicates:</b> Team tab → <b>Scorebook names</b> → <b>Rename</b> fixes a misspelled name or
+        merges two names into one person. <b>Undo</b> brings it back.</li>
+    </ul>
+
+    <h2 id="stats">6. Reading the stats</h2>
+    <ul>
+      <li><b>Season:</b> tap the record at the top right to pick a season, a tournament, or All seasons. It applies
+        to every page.</li>
+      <li><b>Stats → Leaders:</b> the top five in each category. <b>Best Offensive Player</b> is a rating where 50 is
+        the team's average hitter; on-base and slugging count most, then RBI and runs per game. Averages only count
+        regulars (2 plate appearances a game).</li>
+      <li><b>Stats → All Players:</b> the full table. Tap a column to sort.</li>
+      <li><b>Stats → Over Time:</b> pick any player to see their running AVG, OBP, SLG and OPS game by game. Tap the
+        chips to turn lines on and off, and tap the chart for the numbers at any game.</li>
+      <li><b>My Stats:</b> your own numbers, chart, game log and spray chart. The menu at the top switches between
+        this team, <b>All my teams</b>, or any other team you're on.</li>
+      <li><b>Spray:</b> where balls were hit, for the team or one player.</li>
+    </ul>
+
+    <h2 id="help">7. Beta, problems and contact</h2>
+    <p>Team Stats is in beta, so you may hit the odd bug. When you do, tap <b>Report a problem</b> at the bottom of
+      any page and tell us what happened. It sends the page you were on and any recent errors along with it, which
+      helps us fix it fast. Errors are also logged automatically.</p>
+    <p>Questions, ideas or anything else: <a href="mailto:team.stat.app@gmail.com">team.stat.app@gmail.com</a>.
+      See our <a href="privacy.html">Privacy Policy</a> for what's stored and how to delete your data.</p>
+  </main>
+</body>
+</html>

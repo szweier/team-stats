@@ -17,16 +17,17 @@
 <body>
   <main class="policy">
     <h1>Privacy Policy</h1>
-    <p class="muted">Slow Pitch Book app and team stats website · Last updated October 25, 2026</p>
+    <p class="muted">Slow Pitch Book app and team stats website · Last updated October 28, 2026</p>
 
     <h2>The short version</h2>
     <p>Slow Pitch Book keeps your scorebook on your device. A team's website is private to the players on that
       team: you sign in with your email, and only teammates see the schedule, who's coming and the stats. There
-      are no ads, no tracking and no analytics.</p>
+      are no ads and no tracking. The website is in beta: when something goes wrong it records the error so we can
+      fix it, and you can send us a problem report (see below).</p>
 
     <h2>What stays on your device</h2>
     <p>Games, lineups, player names, plays, spray charts, seasons and settings in the app are stored only on your
-      iPhone or iPad. One-player games are never uploaded.</p>
+      iPhone or iPad. One-player games in the app are never uploaded.</p>
 
     <h2>What the app uploads to a team website</h2>
     <ul>
@@ -42,12 +43,29 @@
       <li>Your email address (to send sign-in links), the name you choose, and the teams you're on.</li>
       <li>For teams you're on: the schedule your managers add (dates, times, opponents, locations, notes) and
         your answers to "Can you make it?", including any note you add.</li>
+      <li>Games kept score of on the website: the same game details the app uploads (above), plus every saved
+        version of the game and who saved it, so nothing tapped is lost. While you score, the game is also saved in
+        your browser on that phone until it's uploaded.</li>
+      <li>Stats a manager imports from a CSV file: each player's name and stats for each game in it.</li>
+      <li>One-player games you track on the website (My Stats → Tracked Players): stored under your account and
+        visible only to you.</li>
     </ul>
     <p>Your name, your answers and the team's stats are visible to the other players on that team. Your email
       address isn't shown to anyone. Managers can see the team's invite link and scorer code.</p>
-    <p>Everything is stored with Google Firebase (Authentication and Cloud Firestore). The website is hosted on
-      GitHub Pages; their standard server logs may include your IP address. The website keeps your sign-in on
-      your own device and uses no cookies, analytics or ads.</p>
+    <p>Everything is stored with Google Firebase (Authentication and Cloud Firestore), with automatic backups kept
+      for up to 14 weeks. The website is hosted on GitHub Pages; their standard server logs may include your IP
+      address. The website keeps your sign-in on your own device and uses no cookies, analytics or ads.</p>
+
+    <h2>Problem reports and error logs (beta)</h2>
+    <ul>
+      <li><b>Problem reports:</b> when you use "Report a problem", we store what you write together with your name,
+        email address, the page you were on, the team, the website's version, your browser and device type, and
+        any errors from that visit, so we can look into it and reply.</li>
+      <li><b>Error logs:</b> when something breaks on the website while you're signed in, it records the error
+        message and technical details, the page and team, the website's version and your browser and device type,
+        along with your account identifier. It doesn't include your stats or anything you typed.</li>
+    </ul>
+    <p>Only we can read these, in our Firebase console; other players never see them.</p>
     <p>When a manager or scheduler opens the map to pin a game's field, the map is loaded from OpenStreetMap
       and Esri, place searches go to OpenStreetMap's search service, and the map library comes from cdnjs. These
       services see the area being viewed, what was searched for and your IP address. Nothing is sent to them
@@ -67,7 +85,7 @@
     <p>Slow Pitch Book is a scorekeeping tool for adult recreational sports and isn't directed at children.</p>
 
     <h2>Contact</h2>
-    <p>Questions or requests: <a href="mailto:CONTACT-EMAIL">CONTACT-EMAIL</a></p>
+    <p>Questions or requests: <a href="mailto:team.stat.app@gmail.com">team.stat.app@gmail.com</a></p>
   </main>
 </body>
 </html>

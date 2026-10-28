@@ -1,8 +1,8 @@
 // Lets the site open with no signal (at a field), so scoring can carry on from what's saved on the phone.
 // Online it always fetches the latest files first, so updates show right away; the saved copy is only used offline.
-const CACHE = "team-stats-v29";
+const CACHE = "team-stats-v30";
 const SHELL = ["./", "index.html", "config.js", "engine.js", "book.js", "scorer.js", "app.js", "styles.css",
-  "apple-touch-icon.png", "favicon.png", "manifest.json"];
+  "apple-touch-icon.png", "favicon.png", "manifest.json", "help.html", "privacy.html"];
 
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -20,8 +20,10 @@ self.addEventListener("fetch", e => {
   if (req.method !== "GET" || url.origin !== location.origin) return;
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
-    // Files are saved without their ?v= cache-busting stamp; pages are saved as the site's start page.
-    const key = req.mode === "navigate" ? new URL("index.html", self.registration.scope).href : url.origin + url.pathname;
+    // Files are saved without their ?v= cache-busting stamp. The app's pages (any address, any #route) are saved
+    // as the site's start page; the help and privacy pages under their own names, so they never replace it.
+    const page = /\/(help|privacy)\.html$/.test(url.pathname);
+    const key = req.mode === "navigate" && !page ? new URL("index.html", self.registration.scope).href : url.origin + url.pathname;
     try {
       const res = await fetch(req, { cache: "no-store" });
       if (res.ok) cache.put(key, res.clone());

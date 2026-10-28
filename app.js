@@ -492,7 +492,7 @@
   // Both go to the database (reports/, errors/), readable only in the Firebase console, so nobody's email is
   // shown to the whole site. Errors are sent automatically: each message once a visit, at most 5 a visit.
 
-  const VERSION = "v29";   // the cache name in sw.js; bump both together
+  const VERSION = "v30";   // the cache name in sw.js; bump both together
   const recentErrors = [];  // this visit's errors, also sent with a problem report
   let errorsSent = 0;
   const pageInfo = () => ({ page: location.hash || "#/", team: state.key || "", version: VERSION,
@@ -1004,7 +1004,7 @@
   function panel(...kids) {
     return h("div", { class: "lock" }, h("div", { class: "panel" },
       h("img", { src: "apple-touch-icon.png", alt: "" }), h("div", null, h("span", { class: "beta-tag" }, "Beta")), ...kids,
-      h("p", { class: "fine" }, h("a", { href: "privacy.html" }, "Privacy"))));
+      h("p", { class: "fine" }, h("a", { href: "help.html" }, "Getting started"), " · ", h("a", { href: "privacy.html" }, "Privacy"))));
   }
 
   function copyButton(text, label) {
@@ -1248,6 +1248,7 @@
         h("div", { class: "foot" },
           state.updated ? `Updated ${state.updated.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · ` : "",
           "Refreshes automatically · ",
+          h("a", { href: "help.html", class: "report-link" }, "Help"), " · ",
           reportLink(() => { if (location.hash !== "#/report") state.reportFrom = location.hash || "#/"; }))),
     ];
   }
