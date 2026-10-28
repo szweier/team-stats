@@ -57,8 +57,8 @@
     sprayGame: "",
     event: savedEvent(),  // null = the newest season, "all" = every game, or a season / tournament key
     gamePlayer: {},
-    myScope: "",          // My Stats: "" = this team, "all" = every team you're on
-    myAll: null,          // their games once loaded (or "loading")
+    myScope: "",          // My Stats: "" = this team, "all" = every team you're on, or another team's id
+    myAll: null,          // those games once loaded (or "loading")
     myYear: "",
     flash: "",            // one-time message shown at the top of a page
   };
@@ -2232,9 +2232,8 @@
   }
   const counts = l => l.pa > 0 || l.r > 0 || l.crr > 0;
 
-  /// Published games from every team you're on (for "All my teams").
-  async function loadAllMyGames() {
-    const ids = Object.keys(state.profile.teams || {});
+  /// Published games from the teams in `ids` (every team you're on for "All my teams").
+  async function loadAllMyGames(ids = Object.keys(state.profile.teams || {})) {
     // Each team's links and renames apply to its own games, like on that team's pages.
     const lists = await Promise.all(ids.map(id => id === state.key ? state.games
       : Promise.all([
@@ -2271,23 +2270,30 @@
   }
 
   function myStatsView() {
-    const teamCount = Object.keys(state.profile?.teams || {}).length;
-    const all = state.myScope === "all" && teamCount > 1;
-    if (all && state.myAll == null) {
+    const myTeams = state.profile?.teams || {};
+    const teamCount = Object.keys(myTeams).length;
+    // Which teams: this one (the default), all of them, or one of your other teams.
+    const scope = state.myScope === "all" ? (teamCount > 1 ? "all" : "")
+      : state.myScope && state.myScope !== state.key && myTeams[state.myScope] ? state.myScope : "";
+    const all = scope === "all";
+    const other = scope && !all ? scope : null;
+    if (scope && state.myAll == null) {
       state.myAll = "loading";
-      loadAllMyGames()
+      loadAllMyGames(other ? [other] : undefined)
         .then(gs => { state.myAll = gs; })
         .catch(() => { state.myAll = null; state.myScope = ""; state.flash = "Couldn't load your other teams."; })
         .finally(() => { if (route().name === "me") render(); });
     }
-    const loading = all && !Array.isArray(state.myAll);
+    const loading = !!scope && !Array.isArray(state.myAll);
     const solo = scorer ? scorer.mySoloGames() : [];
-    const source = [...(all ? (loading ? [] : state.myAll) : state.games), ...solo];
+    const source = scope ? [...(loading ? [] : state.myAll), ...(all ? solo : [])] : [...state.games, ...solo];
     const pool = source.filter(g => myLine(g))
       .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
 
     const years = [...new Set(pool.map(yearOf).filter(Boolean))];
-    const event = currentEvent();   // the season picked in the header (a year only matters for "All seasons")
+    // The season picked in the header (a year only matters for "All seasons"). It's this team's, so another
+    // team on its own shows all its seasons, broken down below.
+    const event = other ? "" : currentEvent();
     const year = !event && years.includes(state.myYear) ? state.myYear : "";
     const inYear = pool.filter(g => !year || yearOf(g) === year);
     const events = eventsOf(inYear);
@@ -2300,7 +2306,9 @@
     const controls = h("div", { class: "controls" },
       teamCount > 1 ? h("select", { class: "control", "aria-label": "Teams",
         onchange: e => { state.myScope = e.target.value; state.myAll = null; render(); } },
-        option("", `${state.team?.name || "This team"} only`, !all), option("all", "All my teams", all)) : null,
+        option("", `${state.team?.name || "This team"} (this team)`, !scope), option("all", "All my teams", all),
+        Object.entries(myTeams).filter(([id]) => id !== state.key).sort((a, b) => String(a[1]).localeCompare(String(b[1])))
+          .map(([id, name]) => option(id, name || "Team", id === other))) : null,
       !event && years.length > 1 ? h("select", { class: "control", "aria-label": "Year", onchange: e => pick("myYear", e.target.value) },
         option("", "All years", !year), years.map(y => option(y, y, y === year))) : null);
 
