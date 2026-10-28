@@ -518,6 +518,9 @@
   async function loadProfile() {
     if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
     state.profile = (await getDoc(`users/${me()}`)) || { teams: {} };
+    // Starting teams is only for accounts listed in config/teamCreators (for now, until teams are paid for).
+    const creators = await getDoc("config/teamCreators").catch(() => null);
+    state.canCreateTeams = (creators?.emails || []).includes(String(session?.email || "").toLowerCase());
     state.profile.teams = state.profile.teams || {};
     // Every team you're on, including ones a manager added you to from the app (no invite involved).
     try {
@@ -716,7 +719,8 @@
     const name = rawName.trim().slice(0, 80);
     if (!name) throw new Error("Give the team a name.");
     const teamId = randomCode(22, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789");
-    await setDoc(`teams/${teamId}`, { name, members: [me()], managers: [me()], createdAt: now(), updatedAt: now() }, { exists: false });
+    try { await setDoc(`teams/${teamId}`, { name, members: [me()], managers: [me()], createdAt: now(), updatedAt: now() }, { exists: false }); }
+    catch (e) { throw e instanceof Forbidden ? new Error("Starting new teams isn't open to everyone yet. Ask to be added.") : e; }
     await becomeMember(teamId, name);
     const code = newCode();
     await setDoc(`invites/${code}`, { teamId, teamName: name, createdAt: now() }, { exists: false });
@@ -1059,11 +1063,11 @@
       teams.length
         ? [h("p", null, "Your teams"), h("div", { class: "team-list" }, teams.map(([id, name]) =>
             h("div", { class: "team-item" }, h("a", { href: `${SITE}?t=${id}` }, name || "Team"))))]
-        : h("p", null, "You're not on a team yet. Ask your team's admin to send you the team's invite link, then open it to join, or start your own team."),
-      h("details", { class: "fold", open: !teams.length || null }, h("summary", null, "Start a new team"),
+        : h("p", null, `You're not on a team yet. Ask your team's admin to send you the team's invite link, then open it to join${state.canCreateTeams ? ", or start your own team" : ""}.`),
+      state.canCreateTeams ? h("details", { class: "fold", open: !teams.length || null }, h("summary", null, "Start a new team"),
         h("p", { class: "or" }, "You'll be its admin: invite your teammates with its link, set the schedule and keep score here."),
         h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await createTeam(teamName.value); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
-          teamName, h("button", { class: "btn", type: "submit" }, "Create Team"))),
+          teamName, h("button", { class: "btn", type: "submit" }, "Create Team"))) : null,
       // A team kept in the Slow Pitch Book app: its scorer code brings it here and makes you its admin.
       h("details", { class: "fold" }, h("summary", null, "Have a team in the Stat Book app?"),
         h("p", { class: "or" }, "In the app tap Teams → your team → Website & Scoring → Set Up Team on Website, or enter the team's scorer code here. You'll become the team's admin."),
