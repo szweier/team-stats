@@ -790,3 +790,20 @@ h2.section.leaders-title { margin-top: 22px; }
 .trend-tip-row { display: flex; align-items: center; gap: 7px; margin-top: 3px; }
 .trend-tip-row b { font-variant-numeric: tabular-nums; min-width: 42px; }
 .trend-empty { padding: 20px 4px; text-align: center; }
+
+/* ---------- Beta ---------- */
+
+.pill.beta { background: var(--optic); color: #111; letter-spacing: 0.06em; }
+.beta-tag {
+  display: inline-block; margin-top: 10px; padding: 3px 9px; border-radius: 999px; background: var(--optic); color: #111;
+  font: 800 11px/1.2 var(--round); letter-spacing: 0.08em; text-transform: uppercase;
+}
+.report-link { color: inherit; text-decoration: underline; }
+.report-form { display: grid; gap: 10px; text-align: left; }
+.report-form textarea {
+  width: 100%; min-height: 130px; resize: vertical; padding: 12px; border-radius: 12px; border: 1px solid var(--line);
+  background: var(--card-2); color: var(--text); font: 16px/1.4 system-ui, -apple-system, sans-serif;
+}
+.lock .report-form textarea { background: rgba(255, 255, 255, 0.08); border-color: rgba(255, 255, 255, 0.18); color: #fff; }
+.lock .report-form .muted { color: rgba(255, 255, 255, 0.65); }
+.report-form .err { color: var(--loss); font-size: 14px; min-height: 1.2em; }

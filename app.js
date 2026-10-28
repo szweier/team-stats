@@ -488,6 +488,64 @@
   const showCode = c => (c || "").replace(/(.{4})(?=.)/g, "$1-");
   const now = () => Math.floor(Date.now() / 1000);
 
+  // ---------- Beta: problem reports and error logging ----------
+  // Both go to the database (reports/, errors/), readable only in the Firebase console, so nobody's email is
+  // shown to the whole site. Errors are sent automatically: each message once a visit, at most 5 a visit.
+
+  const VERSION = "v27";   // the cache name in sw.js; bump both together
+  const recentErrors = [];  // this visit's errors, also sent with a problem report
+  let errorsSent = 0;
+  const pageInfo = () => ({ page: location.hash || "#/", team: state.key || "", version: VERSION,
+    agent: navigator.userAgent.slice(0, 300) });
+
+  function logError(err, where) {
+    const message = String(err?.message || err || "Unknown error").slice(0, 500);
+    // No signal isn't a bug.
+    if (!navigator.onLine || (err instanceof TypeError && /fetch|network|load failed/i.test(message))) return;
+    if (recentErrors.some(e => e.message === message)) return;
+    recentErrors.push({ message, where, at: new Date().toISOString() });
+    if (recentErrors.length > 10) recentErrors.shift();
+    if (DEMO || !session || errorsSent >= 5) return;
+    errorsSent++;
+    fs("POST", "errors", { body: { fields: fieldsOf_enc({ uid: me(), message, stack: String(err?.stack || "").slice(0, 2000),
+      where: String(where).slice(0, 100), ...pageInfo(), at: now() }) } }).catch(() => {});
+  }
+  window.addEventListener("error", e => logError(e.error || e.message, "page"));
+  window.addEventListener("unhandledrejection", e => logError(e.reason, "promise"));
+
+  async function sendReport(text) {
+    if (DEMO) return;
+    await fs("POST", "reports", { body: { fields: fieldsOf_enc({ uid: me(), name: state.profile?.name || "", email: session?.email || "",
+      text, ...pageInfo(), page: state.reportFrom || location.hash || "#/",
+      errors: recentErrors.map(e => `${e.at} ${e.where}: ${e.message}`).join("\n").slice(0, 4000), at: now() }) } });
+  }
+
+  /// "What went wrong?" `back()` makes the way out (Cancel, then Done).
+  function reportForm(back) {
+    const text = h("textarea", { rows: "6", maxlength: "4000", "aria-label": "What went wrong",
+      placeholder: "What happened, and what did you expect? For example: I tapped Save on the lineup and nothing happened." });
+    const err = h("div", { class: "err", role: "alert" });
+    const button = h("button", { class: "btn", type: "submit" }, "Send Report");
+    const form = h("form", { class: "report-form", onsubmit: async e => {
+      e.preventDefault();
+      const t = text.value.trim();
+      if (!t) { err.textContent = "Tell us what went wrong first."; return; }
+      button.disabled = true; button.textContent = "Sending…"; err.textContent = "";
+      try {
+        await sendReport(t);
+        form.replaceChildren(h("p", null, "Thanks! Your report was sent. It helps fix things for everyone."), back("Done"));
+      } catch (e2) {
+        err.textContent = e2.message || "Couldn't send it. Try again.";
+        button.disabled = false; button.textContent = "Send Report";
+      }
+    } },
+      h("p", { class: "muted small" }, "Team Stats is in beta, so things can go wrong. Tell us what happened or what's confusing. The page you were on, the app version and any recent errors go with it, plus your name and email so we can follow up."),
+      text, err, h("div", { class: "form-actions start" }, button, back("Cancel")));
+    setTimeout(() => text.focus(), 50);
+    return form;
+  }
+  const reportLink = onclick => h("a", { href: "#/report", class: "report-link", onclick }, "Report a problem");
+
   // ---------- Data ----------
 
   let demoData = null;
@@ -766,7 +824,7 @@
     if (parts[0] === "game" && parts[1]) return { name: "game", id: decodeURIComponent(parts[1]) };
     if (parts[0] === "solo" && parts[1]) return { name: "solo", id: decodeURIComponent(parts[1]) };
     if (parts[0] === "score") return { name: "score", id: parts[1] ? decodeURIComponent(parts[1]) : null };
-    if (["games", "stats", "me", "spray", "team"].includes(parts[0])) return { name: parts[0] };
+    if (["games", "stats", "me", "spray", "team", "report"].includes(parts[0])) return { name: parts[0] };
     return { name: "schedule" };
   }
 
@@ -905,6 +963,7 @@
         if (after) await after(); else render();
       } catch (err) {
         if (btn) btn.disabled = false;
+        if (!(err instanceof Forbidden)) logError(err, "action");
         alert(err.message || "Something went wrong. Try again.");
       }
     };
@@ -912,7 +971,7 @@
 
   function panel(...kids) {
     return h("div", { class: "lock" }, h("div", { class: "panel" },
-      h("img", { src: "apple-touch-icon.png", alt: "" }), ...kids,
+      h("img", { src: "apple-touch-icon.png", alt: "" }), h("div", null, h("span", { class: "beta-tag" }, "Beta")), ...kids,
       h("p", { class: "fine" }, h("a", { href: "privacy.html" }, "Privacy"))));
   }
 
@@ -1075,7 +1134,9 @@
           code, h("button", { class: "btn", type: "submit" }, "Add Team"))),
       h("p", { class: "or" }, `Signed in as ${session.email} · `,
         h("a", { href: "#", onclick: e => { e.preventDefault(); nameEdit(); } }, "Change name"), " · ",
-        h("a", { href: "#", onclick: e => { e.preventDefault(); signOut(); } }, "Sign out"))));
+        h("a", { href: "#", onclick: e => { e.preventDefault(); signOut(); } }, "Sign out"), " · ",
+        reportLink(e => { e.preventDefault(); state.reportFrom = "home"; app.replaceChildren(panel(h("h1", null, "Report a problem"),
+          reportForm(label => h("a", { class: "btn ghost", href: "#", onclick: ev => { ev.preventDefault(); homeView(); } }, label)))); }))));
   }
 
   function nameEdit() {
@@ -1142,7 +1203,7 @@
           h("div", null,
             h("h1", null, state.team?.name || "Team"),
             h("div", { class: "sub" }, `${state.members.length} player${state.members.length === 1 ? "" : "s"} · ${finals.length} game${finals.length === 1 ? "" : "s"} played`,
-              DEMO ? " " : "", DEMO ? h("span", { class: "pill demo" }, "Demo data") : null)),
+              " ", h("span", { class: "pill beta" }, "Beta"), DEMO ? " " : "", DEMO ? h("span", { class: "pill demo" }, "Demo data") : null)),
           seasonPicker(shown)),
         h("nav", { class: "tabs", "aria-label": "Sections" },
           tab("schedule", "#/", "Schedule"), tab("games", "#/games", "Games"), tab("stats", "#/stats", "Stats"),
@@ -1154,7 +1215,8 @@
         content,
         h("div", { class: "foot" },
           state.updated ? `Updated ${state.updated.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · ` : "",
-          "Refreshes automatically")),
+          "Refreshes automatically · ",
+          reportLink(() => { if (location.hash !== "#/report") state.reportFrom = location.hash || "#/"; }))),
     ];
   }
 
@@ -2520,7 +2582,9 @@
       document.title = `Keep Score · ${state.team?.name || "Team"}`;
       return;
     }
-    const views = { schedule: scheduleView, games: gamesView, stats: statsView, me: myStatsView, spray: sprayView, team: teamView };
+    const views = { schedule: scheduleView, games: gamesView, stats: statsView, me: myStatsView, spray: sprayView, team: teamView,
+      report: () => [h("h2", { class: "section" }, "Report a problem"),
+        h("div", { class: "card pad" }, reportForm(label => h("a", { class: "btn ghost", href: state.reportFrom || "#/" }, label)))] };
     const content = r.name === "game" ? gameView(r.id) : r.name === "score" ? (scorer ? scorer.view(r) : gamesView())
       : r.name === "solo" ? (scorer ? scorer.soloGameView(r.id) : myStatsView()) : views[r.name]();
     app.replaceChildren(...shell(r.name === "game" || r.name === "score" ? "games" : r.name === "solo" ? "me" : r.name, content));
@@ -2633,6 +2697,7 @@
     } catch (e) {
       // Offline at the field: carry on with the games saved on this phone.
       if ((e instanceof TypeError || !navigator.onLine) && scorer) { await scorer.ready; if (offlineStart()) return; }
+      logError(e, "start");
       app.replaceChildren(panel(h("h1", null, "Something went wrong"), h("p", null, e.message || "Couldn't reach the server."),
         h("button", { class: "btn", type: "button", onclick: () => location.reload() }, "Try Again")));
     }
