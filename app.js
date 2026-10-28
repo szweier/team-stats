@@ -492,7 +492,7 @@
   // Both go to the database (reports/, errors/), readable only in the Firebase console, so nobody's email is
   // shown to the whole site. Errors are sent automatically: each message once a visit, at most 5 a visit.
 
-  const VERSION = "v28";   // the cache name in sw.js; bump both together
+  const VERSION = "v29";   // the cache name in sw.js; bump both together
   const recentErrors = [];  // this visit's errors, also sent with a problem report
   let errorsSent = 0;
   const pageInfo = () => ({ page: location.hash || "#/", team: state.key || "", version: VERSION,
@@ -653,7 +653,24 @@
   }
 
   /// Loads the open team: its record, members, schedule and published games. False if you're not on it.
-  async function load(teamId) {
+  // Refreshing a team page. Every read of a document is billed, and an open page refreshes every 20 seconds,
+  // so the automatic refresh only reads games and schedule items changed in the last 10 minutes (allowing for
+  // phones whose clocks are a little off) and keeps the rest from last time. A full read (everything, which
+  // also catches deleted games and member, link and rename changes) happens on opening the page, after you
+  // change something, and every 5 minutes.
+  const FULL_EVERY_MS = 5 * 60000;
+  const RECENT_S = 10 * 60;
+  let teamCache = null;   // { teamId, fullAt, games: Map(doc id → doc), schedule: Map, members, links, names }
+
+  async function changedSince(teamId, sub, since) {
+    const rows = await fs("POST", `${DOCS}/teams/${teamId}:runQuery`, { body: { structuredQuery: {
+      from: [{ collectionId: sub }],
+      where: { fieldFilter: { field: { fieldPath: "updatedAt" }, op: "GREATER_THAN", value: { integerValue: String(since) } } },
+    } } });
+    return (rows || []).filter(r => r.document).map(r => ({ id: idOf(r.document), ...fieldsOf(r.document) }));
+  }
+
+  async function load(teamId, { recent = false } = {}) {
     let team, games, schedule, members, links = [], names = [], settings = null;
     if (DEMO) {
       const d = await loadDemo();
@@ -668,14 +685,28 @@
     } else {
       try { team = await getDoc(`teams/${teamId}`); } catch (e) { if (e instanceof Forbidden) return false; throw e; }
       if (!team) return false;
-      [games, schedule, members, links, names] = await Promise.all([
-        listDocs(`teams/${teamId}/games`).then(ds => ds.map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean)),
-        listDocs(`teams/${teamId}/schedule`),
-        listDocs(`teams/${teamId}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))),
-        // The database keeps these ids decoded ("steve z"), so key them the way they're looked up ("steve%20z").
-        listDocs(`teams/${teamId}/links`).then(ds => ds.map(l => ({ ...l, id: l.name ? linkKey(l.name) : l.id }))).catch(() => []),
-        listDocs(`teams/${teamId}/names`).then(ds => ds.map(r => ({ ...r, id: r.from ? linkKey(r.from) : r.id }))).catch(() => []),
-      ]);
+      const c = teamCache;
+      if (recent && c && c.teamId === teamId && Date.now() - c.fullAt < FULL_EVERY_MS) {
+        const since = now() - RECENT_S;
+        const [g, sc] = await Promise.all([changedSince(teamId, "games", since), changedSince(teamId, "schedule", since)]);
+        for (const d of g) c.games.set(d.id, d);
+        for (const d of sc) c.schedule.set(d.id, d);
+      } else {
+        const [g, sc, m, l, n] = await Promise.all([
+          listDocs(`teams/${teamId}/games`),
+          listDocs(`teams/${teamId}/schedule`),
+          listDocs(`teams/${teamId}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))),
+          // The database keeps these ids decoded ("steve z"), so key them the way they're looked up ("steve%20z").
+          listDocs(`teams/${teamId}/links`).then(ds => ds.map(l => ({ ...l, id: l.name ? linkKey(l.name) : l.id }))).catch(() => []),
+          listDocs(`teams/${teamId}/names`).then(ds => ds.map(r => ({ ...r, id: r.from ? linkKey(r.from) : r.id }))).catch(() => []),
+        ]);
+        teamCache = { teamId, fullAt: Date.now(), games: new Map(g.map(d => [d.id, d])), schedule: new Map(sc.map(d => [d.id, d])),
+          members: m, links: l, names: n };
+      }
+      const t = teamCache;
+      games = [...t.games.values()].map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean);
+      schedule = [...t.schedule.values()].map(d => ({ ...d }));
+      [members, links, names] = [t.members, t.links, t.names];
       if ((team.managers || []).includes(me())) settings = await getDoc(`teams/${teamId}/private/settings`).catch(() => null);
       // Keep "My teams" in step with the team's current name.
       if (state.profile.teams[teamId] !== team.name) addToMyTeams(teamId, team.name).catch(() => {});
@@ -744,7 +775,8 @@
     }
     const path = `availability.${quote(me())}`;
     await setDoc(`teams/${state.key}/schedule/${gameId}`,
-      status ? { availability: { [me()]: { status, name, updatedAt: now() } } } : {}, { mask: [path], exists: true });
+      { ...(status ? { availability: { [me()]: { status, name, updatedAt: now() } } } : {}), updatedAt: now() },
+      { mask: [path, "updatedAt"], exists: true });
   }
 
   // Team management (managers)
@@ -2612,7 +2644,7 @@
       // Don't redraw under someone's fingers while they're filling in a form.
       if (document.visibilityState !== "visible" || !state.key || state.editing || route().name === "score") return;
       try {
-        const result = await load(state.key);
+        const result = await load(state.key, { recent: true });
         if (result === false) { stopRefresh(); return notMemberView(); }
         if (result === "changed") render();
       } catch { /* try again next time */ }
