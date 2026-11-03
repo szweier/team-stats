@@ -18,6 +18,7 @@
   const CLAIM = clean(params.get("claim")).toUpperCase();
   const SITE = location.origin + location.pathname;
   const REFRESH_MS = 20000;
+  const LIVE_REFRESH_MS = 8000;   // while a game in progress is on screen
   const app = document.getElementById("app");
 
   const storage = {
@@ -201,7 +202,7 @@
         if (!(l.pa > 0 || l.r > 0 || l.crr > 0)) continue;
         const name = String(l.name || "").trim();
         const key = l.member ? `m:${l.member}` : `n:${name.toLowerCase()}`;
-        const s = by.get(key) || Object.fromEntries([["name", name], ["g", 0], ...FIELDS.map(f => [f, 0])]);
+        const s = by.get(key) || Object.fromEntries([["name", name], ["member", l.member || null], ["g", 0], ...FIELDS.map(f => [f, 0])]);
         s.g += 1;
         for (const f of FIELDS) s[f] += l[f] || 0;
         by.set(key, s);
@@ -492,7 +493,7 @@
   // Both go to the database (reports/, errors/), readable only in the Firebase console, so nobody's email is
   // shown to the whole site. Errors are sent automatically: each message once a visit, at most 5 a visit.
 
-  const VERSION = "v31";   // the cache name in sw.js; bump both together
+  const VERSION = "v32";   // the cache name in sw.js; bump both together
   const recentErrors = [];  // this visit's errors, also sent with a problem report
   let errorsSent = 0;
   const pageInfo = () => ({ page: location.hash || "#/", team: state.key || "", version: VERSION,
@@ -671,7 +672,7 @@
   }
 
   async function load(teamId, { recent = false } = {}) {
-    let team, games, schedule, members, links = [], names = [], settings = null;
+    let team, games, schedule, members, links = [], names = [], settings = null, awards = [];
     if (DEMO) {
       const d = await loadDemo();
       team = { name: d.board.name, members: d.members.map(m => m.uid), managers: ["demo-me"], leads: ["demo-alex"],
@@ -681,32 +682,38 @@
       members = d.members;
       links = state.links || [];
       names = state.names || [];
+      awards = state.awards || [];
       settings = { scorerCode: "DEMOCODE2026", inviteCode: "DEMOINVITE26" };
     } else {
       try { team = await getDoc(`teams/${teamId}`); } catch (e) { if (e instanceof Forbidden) return false; throw e; }
       if (!team) return false;
       const c = teamCache;
       if (recent && c && c.teamId === teamId && Date.now() - c.fullAt < FULL_EVERY_MS) {
-        const since = now() - RECENT_S;
+        // Changes are stamped by the clock of the phone that made them, which can be off from this one. So look
+        // back from whichever is earlier, now or the newest change already seen (stamped by those phones), but
+        // never more than an hour, so a quiet team isn't re-read every time.
+        const newest = Math.max(0, ...[...c.games.values(), ...c.schedule.values()].map(d => Number(d.updatedAt) || 0));
+        const since = Math.max(now() - 3600, Math.min(now(), newest || now())) - RECENT_S;
         const [g, sc] = await Promise.all([changedSince(teamId, "games", since), changedSince(teamId, "schedule", since)]);
         for (const d of g) c.games.set(d.id, d);
         for (const d of sc) c.schedule.set(d.id, d);
       } else {
-        const [g, sc, m, l, n] = await Promise.all([
+        const [g, sc, m, l, n, aw] = await Promise.all([
           listDocs(`teams/${teamId}/games`),
           listDocs(`teams/${teamId}/schedule`),
           listDocs(`teams/${teamId}/members`).then(ds => ds.map(d => ({ uid: d.id, name: d.name }))),
           // The database keeps these ids decoded ("steve z"), so key them the way they're looked up ("steve%20z").
           listDocs(`teams/${teamId}/links`).then(ds => ds.map(l => ({ ...l, id: l.name ? linkKey(l.name) : l.id }))).catch(() => []),
           listDocs(`teams/${teamId}/names`).then(ds => ds.map(r => ({ ...r, id: r.from ? linkKey(r.from) : r.id }))).catch(() => []),
+          listDocs(`teams/${teamId}/awards`).catch(() => []),
         ]);
         teamCache = { teamId, fullAt: Date.now(), games: new Map(g.map(d => [d.id, d])), schedule: new Map(sc.map(d => [d.id, d])),
-          members: m, links: l, names: n };
+          members: m, links: l, names: n, awards: aw };
       }
       const t = teamCache;
       games = [...t.games.values()].map(d => { try { return JSON.parse(d.json); } catch { return null; } }).filter(Boolean);
       schedule = [...t.schedule.values()].map(d => ({ ...d }));
-      [members, links, names] = [t.members, t.links, t.names];
+      [members, links, names, awards] = [t.members, t.links, t.names, t.awards || []];
       if ((team.managers || []).includes(me())) settings = await getDoc(`teams/${teamId}/private/settings`).catch(() => null);
       // Keep "My teams" in step with the team's current name.
       if (state.profile.teams[teamId] !== team.name) addToMyTeams(teamId, team.name).catch(() => {});
@@ -715,9 +722,10 @@
     games = withMemberNames(games, members, links, names);
     games.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     schedule.sort((a, b) => `${a.date} ${a.time || ""}`.localeCompare(`${b.date} ${b.time || ""}`));
-    const signature = JSON.stringify([team, games, schedule, members, links, names, settings]);
+    const signature = JSON.stringify([team, games, schedule, members, links, names, settings, awards]);
     const changed = signature !== state.signature;
-    Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, links, names, settings, signature, updated: new Date() });
+    Object.assign(state, { key: teamId, team, board: { name: team.name }, games, schedule, members, links, names, settings, awards, signature,
+      updated: new Date(), lastChange: changed ? new Date() : state.lastChange });
     if (!state.themeDraft) showTeamTheme(teamId, team.theme);
     return changed ? "changed" : "same";
   }
@@ -1253,8 +1261,8 @@
         state.offline ? h("div", { class: "notice" }, "You're offline. Games saved on this phone are here; they upload when you're back online.") : null,
         content,
         h("div", { class: "foot" },
-          state.updated ? `Updated ${state.updated.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })} · ` : "",
-          "Refreshes automatically · ",
+          h("span", { class: "checked" }, checkedText()),
+          h("a", { href: "#", class: "report-link", onclick: e => { e.preventDefault(); refreshNow(); } }, "Refresh"), " · ",
           h("a", { href: "help.html", class: "report-link" }, "Help"), " · ",
           reportLink(() => { if (location.hash !== "#/report") state.reportFrom = location.hash || "#/"; }))),
     ];
@@ -1278,10 +1286,20 @@
   }
   const ANSWERS = [["in", "In"], ["maybe", "Maybe"], ["out", "Out"]];
 
+  /// The scored game for a scheduled one: the same game when it was scored here, otherwise one on the same day
+  /// against the same opponent (scored in the app or imported).
+  function playedFor(sg) {
+    const same = s => String(s || "").trim().toLowerCase();
+    return state.games.find(g => g.id === sg.id)
+      || state.games.find(g => g.date === sg.date && same(g.opponent) && same(g.opponent) === same(sg.opponent)) || null;
+  }
+
   function scheduleView() {
     const today = todayISO();
-    const upcoming = state.schedule.filter(g => g.date >= today);
-    const past = state.schedule.filter(g => g.date < today).reverse();
+    // A game is past once it's finished or its day has gone by.
+    const done = g => g.date < today || !!playedFor(g)?.isFinal;
+    const upcoming = state.schedule.filter(g => !done(g));
+    const past = state.schedule.filter(done).reverse();
     const manager = canSchedule();
     return [
       h("h2", { class: "section" }, "Upcoming",
@@ -1295,7 +1313,7 @@
             manager ? "No games on the schedule yet. Tap Add Game to add the next one." : "No games on the schedule yet. Your manager adds them here.")),
       past.length ? h("details", { class: "fold past" },
         h("summary", null, `Past games (${past.length})`),
-        past.slice(0, 20).map(g => (state.editing === g.id ? gameForm(g) : state.editingLineup === g.id ? lineupEditor(g) : scheduleCard(g, manager, true)))) : null,
+        past.slice(0, 30).map(g => (state.editing === g.id ? gameForm(g) : scheduleCard(g, manager, true)))) : null,
     ];
   }
 
@@ -1352,7 +1370,31 @@
     const who = (label, list, cls) => list.length ? h("div", { class: "who-group" },
       h("div", { class: `who-head ${cls}` }, `${label} · ${list.length}`),
       h("div", { class: "who-names" }, list.map(p => h("span", { class: "who-name" }, p.name || "Player", p.note ? h("em", null, ` (${p.note})`) : null)))) : null;
-    return h("div", { class: `card sched${isPast ? " is-past" : ""}` },
+    const played = playedFor(g);
+    const result = played?.isFinal
+      ? h("a", { class: "sched-result", href: `#/game/${encodeURIComponent(played.id)}` },
+          h("span", { class: `badge ${played.outcome || "T"}` }, played.outcome || "–"),
+          h("span", null, `Final · ${played.us}–${played.them ?? "?"}`), h("span", { class: "chev" }, "View game ›"))
+      : played ? h("a", { class: "sched-result live", href: `#/game/${encodeURIComponent(played.id)}` },
+          h("span", { class: "pill live" }, "Live"), h("span", null, `${played.us}–${played.them ?? "?"}`), h("span", { class: "chev" }, "Watch ›"))
+      : isPast ? h("div", { class: "sched-result none" }, "No stats entered") : null;
+    if (isPast) {
+      return h("div", { class: `card sched is-past ${played ? "has-stats" : "no-stats"}` },
+        h("div", { class: "sched-top" },
+          h("div", { class: "sched-date" },
+            h("span", { class: "dow" }, d ? d.toLocaleDateString(undefined, { weekday: "short" }) : ""),
+            h("span", { class: "day" }, d ? d.getDate() : ""),
+            h("span", { class: "mon" }, d ? d.toLocaleDateString(undefined, { month: "short" }) : "")),
+          h("div", { class: "sched-info" },
+            manager ? h("div", { class: "sched-admin" },
+              h("button", { class: "link-btn danger", type: "button", onclick: e => {
+                if (confirm(`Delete ${opp} on ${fmtDate(g.date)} from the schedule? Its stats stay.`)) action(() => deleteGame(g.id), { after: refreshNow })(e);
+              } }, "Delete")) : null,
+            h("div", { class: "opp" }, opp),
+            h("div", { class: "meta" }, [g.time ? fmtTime(g.time) : "", g.location || ""].filter(Boolean).join(" · ")),
+            result)));
+    }
+    return h("div", { class: `card sched${played ? " is-live" : ""}` },
       h("div", { class: "sched-top" },
         h("div", { class: "sched-date" },
           h("span", { class: "dow" }, d ? d.toLocaleDateString(undefined, { weekday: "short" }) : ""),
@@ -1370,7 +1412,8 @@
             h("span", { class: "loc-name" }, "📍 ", g.location || "Pinned on the map"),
             h("span", { class: "loc-links" }, mapLinks(g).map(([label, href]) =>
               h("a", { class: "map-link", href, target: "_blank", rel: "noopener" }, label)))) : null,
-          g.notes ? h("div", { class: "notes" }, g.notes) : null)),
+          g.notes ? h("div", { class: "notes" }, g.notes) : null,
+          result)),
       isPast ? null : h("div", { class: "answer" },
         h("span", { class: "answer-label" }, "Can you make it?"),
         h("div", { class: "seg", role: "group", "aria-label": "Your availability" }, ANSWERS.map(([value, label]) =>
@@ -1969,7 +2012,83 @@
   }
 
   function gamesView() {
-    return [keepScoreBar(), gamesList()];
+    // The latest Player of the Day, for a week.
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+    const latest = [...(state.awards || [])].sort((a, b) => b.date.localeCompare(a.date))[0];
+    return [keepScoreBar(), latest && latest.date >= weekAgo ? awardCard(latest) : null, gamesList()];
+  }
+
+  // ---------- Player of the Day ----------
+  // After the last game of a day, the scorer can name the day's best hitter: the same weighted rating as Best
+  // Offensive Player, compared with that day's teammates (2 plate appearances or more, if anyone has 2).
+  // Saved as teams/{t}/awards/{date}, one per day.
+
+  function playerOfTheDay(games) {
+    const rows = seasonLines(games);
+    const regulars = rows.filter(r => r.pa >= 2);
+    const pool = regulars.length ? regulars : rows.filter(r => r.pa > 0);
+    if (!pool.length) return null;
+    const best = offenseRatings(pool).sort((a, b) => b.rating - a.rating || b.ops - a.ops || b.rbi - a.rbi || b.r - a.r)[0];
+    const parts = [`${best.h}-for-${best.ab}`, best.hr ? `${best.hr > 1 ? best.hr + " " : ""}HR` : "",
+      best.b3 ? `${best.b3 > 1 ? best.b3 + " " : ""}3B` : "", best.b2 ? `${best.b2 > 1 ? best.b2 + " " : ""}2B` : "",
+      best.rbi ? `${best.rbi} RBI` : "", best.r ? `${best.r} R` : "", best.bb ? `${best.bb} BB` : ""].filter(Boolean);
+    return { name: best.name, member: best.member || null, line: parts.join(" · "), rating: best.rating, games: best.g };
+  }
+
+  async function saveAward(date, pick) {
+    const award = { date, name: pick.name, line: pick.line, rating: pick.rating, games: pick.games, by: me(), at: now(),
+      ...(pick.member ? { member: pick.member } : {}) };
+    if (DEMO) { state.awards = [...(state.awards || []).filter(a => a.date !== date), award]; return; }
+    await setDoc(`teams/${state.key}/awards/${date}`, award);
+  }
+
+  /// Every game played that day is finished and nothing else is scheduled for it.
+  function dayIsDone(date, alsoDone = null) {
+    const finished = g => g.isFinal || g.id === alsoDone;
+    return state.games.filter(g => g.date === date).every(finished)
+      && state.schedule.filter(sg => sg.date === date).every(sg => { const p = playedFor(sg); return p ? finished(p) : sg.id === alsoDone; });
+  }
+
+  /// Right after a game ends (from the scorer): if it was the day's last, offer to name the Player of the Day.
+  async function offerPlayerOfTheDay(ended) {
+    try {
+      const date = ended?.date;
+      if (!date || (state.awards || []).some(a => a.date === date) || !dayIsDone(date, ended.id)) return;
+      const named = withMemberNames([ended], state.members || [], state.links || [], state.names || [])[0];
+      const day = [...state.games.filter(g => g.date === date && g.id !== ended.id), named];
+      const pick = playerOfTheDay(day);
+      if (!pick) return;
+      if (!confirm(`That was the last game on ${fmtDate(date)}. Name a Player of the Day from the day's stats?`)) return;
+      await saveAward(date, pick);
+      state.flash = `🏆 Player of the Day: ${awardName(pick)} (${pick.line})`;
+      await refreshNow();
+    } catch (e) {
+      logError(e, "player of the day");
+      alert("Couldn't save the Player of the Day. You can name one from the game's page.");
+    }
+  }
+
+  const awardName = a => (a.member && state.members.find(m => m.uid === a.member)?.name) || a.name;
+  function awardCard(a) {
+    return h("div", { class: "card award" },
+      h("div", { class: "award-trophy", "aria-hidden": "true" }, "🏆"),
+      h("div", null,
+        h("div", { class: "award-label" }, `Player of the Day · ${fmtDate(a.date)}`),
+        h("div", { class: "award-name" }, awardName(a)),
+        h("div", { class: "award-line" }, a.line + (a.games > 1 ? ` · ${a.games} games` : ""))));
+  }
+
+  /// On a finished game's page: the day's award, or (for scorers, on the day's last game) a way to name one.
+  function awardSection(g) {
+    const a = (state.awards || []).find(x => x.date === g.date);
+    if (a) return awardCard(a);
+    if (!g.isFinal || !scorer?.isScorerHere() || !dayIsDone(g.date)) return null;
+    return h("div", { class: "form-actions start" }, h("button", { class: "btn small ghost", type: "button", onclick: action(async () => {
+      const pick = playerOfTheDay(state.games.filter(x => x.date === g.date));
+      if (!pick) throw new Error("Nobody batted that day, so there's no one to name.");
+      if (!confirm(`Name ${pick.name} (${pick.line}) Player of the Day for ${fmtDate(g.date)}?`)) return;
+      await saveAward(g.date, pick);
+    }, { after: refreshNow }) }, "🏆 Name Player of the Day"));
   }
 
   function gamesList() {
@@ -2079,7 +2198,9 @@
       if (await scorer.confirmDeleteGame(state.key, g.id, title(g))) { location.hash = "#/games"; await refreshNow(); }
     }, { after: () => {} }) }, "Delete Game") : null;
 
-    const lines = (g.lines || []).filter(l => l.pa > 0 || l.r > 0 || l.crr > 0).map(derive);
+    // The whole batting order (games scored here know it), then anyone else who batted or scored.
+    const lines = (g.lines || []).filter(l => l.spot || l.pa > 0 || l.r > 0 || l.crr > 0)
+      .map((l, i) => ({ l, i })).sort((a, b) => (a.l.spot || 999) - (b.l.spot || 999) || a.i - b.i).map(({ l }) => derive(l));
     const totals = g.totals ? { ...derive(g.totals), name: "Team", _total: true } : null;
     const players = [...new Set((g.spray || []).map(s => s.name))];
     const chosen = players.includes(state.gamePlayer[g.id]) ? state.gamePlayer[g.id] : "";
@@ -2103,7 +2224,7 @@
           .map(([name, runs]) => h("div", null, h("div", { class: "tn" }, name), h("div", { class: "big" }, runs)))
           .flatMap((side, i) => (i ? [h("div", { class: "dash" }, "–"), side] : [side]))),
         h("div", { class: "date" }, `${title(g)} · ${fmtDate(g.date)}`)),
-      g.isFinal ? null : liveCard(g),
+      g.isFinal ? awardSection(g) : liveCard(g),
       h("h2", { class: "section" }, "Line Score", editBtn),
       lineScore(g),
       state.fixingScore?.id === g.id ? opponentRunsEditor(g) : null,
@@ -2645,20 +2766,46 @@
   }
 
   let timer = null;
+  /// Every 8 seconds while a game in progress is on screen (the Schedule, Games or that game's page), else 20.
+  function refreshDelay() {
+    const r = route();
+    const live = r.name === "game" ? state.games.some(g => g.id === r.id && !g.isFinal)
+      : ["schedule", "games"].includes(r.name) && state.games.some(g => !g.isFinal);
+    return live ? LIVE_REFRESH_MS : REFRESH_MS;
+  }
+  async function refreshTick() {
+    timer = null;
+    // Don't redraw under someone's fingers while they're filling in a form.
+    if (document.visibilityState === "visible" && state.key && !state.editing && route().name !== "score") {
+      try {
+        const result = await load(state.key, { recent: true });
+        if (result === false) return notMemberView();
+        if (result === "changed") render(); else showChecked();
+      } catch { /* try again next time */ }
+    }
+    if (!timer) timer = setTimeout(refreshTick, refreshDelay());
+  }
   function startRefresh() {
     stopRefresh();
     if (DEMO) return;
-    timer = setInterval(async () => {
-      // Don't redraw under someone's fingers while they're filling in a form.
-      if (document.visibilityState !== "visible" || !state.key || state.editing || route().name === "score") return;
-      try {
-        const result = await load(state.key, { recent: true });
-        if (result === false) { stopRefresh(); return notMemberView(); }
-        if (result === "changed") render();
-      } catch { /* try again next time */ }
-    }, REFRESH_MS);
+    timer = setTimeout(refreshTick, refreshDelay());
   }
-  function stopRefresh() { if (timer) clearInterval(timer); timer = null; }
+  function stopRefresh() { if (timer) clearTimeout(timer); timer = null; }
+  // Back to the app (unlocked the phone, switched back): check straight away instead of waiting.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && timer) { stopRefresh(); refreshTick(); }
+  });
+
+  const clock = d => d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  /// The footer's "checked" time, updated in place when a check finds nothing new.
+  function checkedText() {
+    if (!state.updated) return "";
+    return `Checked ${clock(state.updated)}${state.lastChange ? ` · last change ${clock(state.lastChange)}` : ""} · `;
+  }
+  function showChecked() {
+    const el = document.querySelector(".foot .checked");
+    if (el) el.textContent = checkedText();
+  }
 
   window.addEventListener("hashchange", () => { state.editing = null; render(); window.scrollTo(0, 0); });
 
@@ -2666,6 +2813,7 @@
 
   const scorer = window.StatScorer && window.StatEngine ? window.StatScorer({
     h, E: window.StatEngine, fs, DOCS, enc, fieldsOf, me, state, render, route, action, refreshNow, isManager, isLead, listDocs, saveLineup,
+    offerPlayerOfTheDay,
     Forbidden, fieldSVG, sprayCard, COLORS, ordinal, fmtDate, todayISO, DEMO, eventsOf, storage, statsTable, BATTING, derive, lineScore,
   }) : null;
 

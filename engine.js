@@ -575,7 +575,9 @@
     if (oc) out.outcome = oc;
     out.usByInning = Array.from({ length: lastInning }, (_, i) => s.runsByInning[i + 1] || 0);
     out.themByInning = Array.from({ length: lastInning }, (_, i) => (g.opponentRuns || {})[i + 1] || 0);
-    out.lines = statLines(g).map(publishedLine);
+    // Each starter's spot in the batting order, so the whole lineup shows before everyone has batted.
+    const spots = new Map(g.lineup.map((p, i) => [p.id, i + 1]));
+    out.lines = statLines(g).map(l => Object.assign(publishedLine(l), spots.has(l.player.id) ? { spot: spots.get(l.player.id) } : {}));
     out.totals = publishedLine(totals(g));
     out.spray = g.plays.flatMap(p => {
       const kind = sprayKind(p);

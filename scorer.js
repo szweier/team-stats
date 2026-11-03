@@ -1149,8 +1149,11 @@ window.StatScorer = function (ctx) {
       case "inPlay":
         return h("div", { class: "btn-stack" },
           grid(btn("Hit", () => { ui.step = "hit"; render(); }, "big hit"), btn("Out", () => { ui.step = "out"; render(); }, "big out")),
-          grid(btn("Error", () => choose("reachedOnError"), "mid err"),
-            btn("FC", () => choose("fieldersChoice"), "mid fc", { disabled: !Object.keys(s.bases).length || null, title: "Needs a runner on base" })),
+          h("div", { class: "btn-grid three" }, btn("Error", () => choose("reachedOnError"), "mid err"),
+            btn("FC", () => choose("fieldersChoice"), "mid fc", { disabled: !Object.keys(s.bases).length || null, title: "Needs a runner on base" }),
+            // A caught fly that scores the runner from third: not a hit, not an at-bat.
+            btn("Sac Fly", () => choose("sacrificeFly", "fly", null), "mid special",
+              { disabled: !(s.bases[THIRD] != null && s.outs < 2) || null, title: "Needs a runner on 3rd and fewer than 2 outs" })),
           cancel());
       case "overFence":
         return h("div", { class: "btn-stack" },
@@ -1582,7 +1585,13 @@ window.StatScorer = function (ctx) {
     return sheet("End this game?", [
       h("p", null, "Make sure the opponent's runs are entered. You can reopen the game later."),
       h("p", { class: "muted" }, `${usName(g)} ${E.state(g).runs} – ${themName(g)} ${E.opponentTotal(g)}`),
-      btn("End Game", async () => { ui.sheet = null; ui.breakAfter = null; await change(rec, x => { x.isFinal = true; }); render(); }, "big danger-solid"),
+      btn("End Game", async () => {
+        ui.sheet = null; ui.breakAfter = null;
+        await change(rec, x => { x.isFinal = true; });
+        render();
+        // The day's last game: offer a Player of the Day.
+        if (rec.game.isFinal && !rec.game.isSolo) ctx.offerPlayerOfTheDay?.(E.publishedGame(rec.game));
+      }, "big danger-solid"),
       btn("Opponent Runs", () => { ui.sheet = { type: "opponent" }; render(); }, "soft"),
     ]);
   }
