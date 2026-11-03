@@ -812,12 +812,28 @@ window.StatScorer = function (ctx) {
 
   // ---------- Batting order picker (New Game, and a manager setting a scheduled game's lineup) ----------
 
-  /// d = { lineup: [{ id, name, member?, on }], write: "" }. Checked players bat in this order.
+  /// d = { lineup: [{ id, name, member?, on }], write: "", self? }. Checked players bat in this order.
+  /// `self` is the scheduled game being set, left out of "Use a lineup from…".
   function lineupBuilder(d) {
     const L = d.lineup;
     const on = L.filter(p => p.on);
     const move = (i, k) => { const j = i + k; if (j < 0 || j >= L.length) return; [L[i], L[j]] = [L[j], L[i]]; render(); };
     const pastGames = state.games.filter(g => (g.lines || []).length).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    // Other scheduled games a manager has set a lineup for, soonest first.
+    const scheduled = (state.schedule || []).filter(sg => sg.id !== d.self && (sg.lineup || []).length)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    /// Use `players` ([{ name, member? }], in batting order) as the lineup; everyone else stays listed, unticked.
+    const useLineup = players => {
+      const used = new Set();
+      const next = players.map(l => {
+        const m = l.member ? state.members.find(x => x.uid === l.member) : null;
+        used.add(l.member || String(l.name).toLowerCase());
+        return { id: E.newID(), name: m ? m.name : l.name, member: m ? m.uid : undefined, on: true };
+      });
+      for (const p of L) if (!used.has(p.member || p.name.toLowerCase())) next.push({ ...p, on: false });
+      d.lineup = next;
+      render();
+    };
     const addWriteIn = () => {
       const n = d.write.trim();
       if (!n) return;
@@ -832,22 +848,23 @@ window.StatScorer = function (ctx) {
       onkeydown: e => { if (e.key === "Enter") { e.preventDefault(); addWriteIn(); } } });
     return [
       h("h2", { class: "section" }, `Batting order (${on.length})`,
-        pastGames.length ? (() => {
+        pastGames.length || scheduled.length ? (() => {
           const sel = h("select", { class: "control", "aria-label": "Use a lineup from another game", onchange: e => {
-            const g = pastGames.find(x => x.id === e.target.value);
-            if (!g) return;
-            // The order players appear in that game (bench and courtesy runners come after the lineup).
-            const used = new Set();
-            const next = g.lines.filter(l => l.pa > 0 || l.r > 0).map(l => {
-              const m = l.member ? state.members.find(x => x.uid === l.member) : null;
-              used.add(l.member || l.name.toLowerCase());
-              return { id: E.newID(), name: m ? m.name : l.name, member: m ? m.uid : undefined, on: true };
-            });
-            for (const p of L) if (!used.has(p.member || p.name.toLowerCase())) next.push({ ...p, on: false });
-            d.lineup = next;
-            render();
+            const [kind, id] = [e.target.value.slice(0, 2), e.target.value.slice(2)];
+            if (kind === "s:") {
+              const sg = scheduled.find(x => x.id === id);
+              if (sg) useLineup(sg.lineup);
+            } else if (kind === "g:") {
+              const g = pastGames.find(x => x.id === id);
+              // The order players appear in that game (bench and courtesy runners come after the lineup).
+              if (g) useLineup(g.lines.filter(l => l.spot || l.pa > 0 || l.r > 0)
+                .map((l, i) => ({ l, i })).sort((a, b) => (a.l.spot || 999) - (b.l.spot || 999) || a.i - b.i).map(({ l }) => l));
+            }
           } }, h("option", { value: "" }, "Use a lineup from…"),
-            pastGames.slice(0, 20).map(g => h("option", { value: g.id }, `${fmtDate(g.date)} ${g.opponent ? (g.isHome ? "vs " : "@ ") + g.opponent : ""}`)));
+            scheduled.length ? h("optgroup", { label: "Scheduled games" }, scheduled.slice(0, 20).map(sg =>
+              h("option", { value: `s:${sg.id}` }, `${fmtDate(sg.date)} ${sg.opponent ? "vs " + sg.opponent : ""} (${sg.lineup.length})`))) : null,
+            pastGames.length ? h("optgroup", { label: "Played games" }, pastGames.slice(0, 20).map(g =>
+              h("option", { value: `g:${g.id}` }, `${fmtDate(g.date)} ${g.opponent ? (g.isHome ? "vs " : "@ ") + g.opponent : ""}`))) : null);
           return sel;
         })() : null),
       h("div", { class: "card lineup-list" }, L.map((p, i) => h("div", { class: `lineup-row${p.on ? "" : " off"}` },
@@ -881,7 +898,7 @@ window.StatScorer = function (ctx) {
           .map(m => ({ id: E.newID(), name: m.name, member: m.uid, on: anyIn ? status(m.uid) === "in" : status(m.uid) !== "out",
             note: status(m.uid) ? `(${status(m.uid)})` : "" }));
       }
-      lineupDrafts.set(sg.id, { lineup, write: "" });
+      lineupDrafts.set(sg.id, { lineup, write: "", self: sg.id });
     }
     const d = lineupDrafts.get(sg.id);
     const on = d.lineup.filter(p => p.on);
