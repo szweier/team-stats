@@ -44,11 +44,17 @@
     strikeoutLooking: { code: "KL", title: "Strikeout looking", batterOut: true, button: "Looking" },
     strikeoutSwinging: { code: "KS", title: "Strikeout swinging", batterOut: true, button: "Swinging" },
     strikeoutFoul: { code: "KF", title: "Strikeout (foul strike 3)", batterOut: true, button: "Foul Ball" },
+    // The batter isn't there yet: their turn passes to the next spot. Not a plate appearance; runners stay put.
+    // Some leagues call an empty spot an automatic out (not charged to the player).
+    skipped: { code: "SKIP", title: "Skipped (not here)", skip: true },
+    skippedOut: { code: "SKIP", title: "Skipped (not here) · out", batterOut: true, skip: true },
   };
   const RESULT_ORDER = Object.keys(RESULTS);
   const isHit = r => !!RESULTS[r].hit;
-  /// Walks and sac flies don't count as at-bats.
-  const isAtBat = r => r !== "walk" && r !== "sacrificeFly";
+  /// A skipped turn (the batter wasn't there).
+  const isSkip = r => !!RESULTS[r]?.skip;
+  /// Walks, sac flies and skipped turns don't count as at-bats.
+  const isAtBat = r => r !== "walk" && r !== "sacrificeFly" && !isSkip(r);
   const batterIsOut = r => !!RESULTS[r].batterOut;
   const totalBases = r => RESULTS[r].hit || 0;
   const isStrikeout = r => r === "strikeoutLooking" || r === "strikeoutSwinging" || r === "strikeoutFoul";
@@ -61,6 +67,7 @@
       case "double": return SECOND;
       case "triple": return THIRD;
       case "homeRun": return HOME;
+      case "skipped": return null;   // never came up
       default: return OUT;
     }
   }
@@ -298,6 +305,7 @@
 
   /// Where a runner on `b` usually ends up for `result`.
   function defaultDestination(b, result, bases, outs = 0, rules = DEFAULT_RULES) {
+    if (isSkip(result)) return b;
     if (isHit(result)) {
       let advance = totalBases(result);
       if (rules.twoOutsRunOnContact && outs === 2) advance += 1;
@@ -399,6 +407,7 @@
   const emptyLine = p => Object.assign({ player: p }, Object.fromEntries(FIELDS.map(f => [f, 0])));
 
   function record(l, p) {
+    if (isSkip(p.result)) return;   // no plate appearance
     l.pa += 1;
     const o = outsRecorded(p);
     if (o === 2) l.doublePlays += 1;
@@ -454,6 +463,7 @@
     const outsInInning = {};
     const st = state(g);  // for runFor credits
     g.plays.forEach(p => {
+      if (p.result === "skipped") return;   // an empty box, as on paper
       // Runners first (lead runner first), so a force / double play numbers the outs in order.
       for (const m of [...p.runners].sort((a, b) => b.from - a.from)) {
         const credited = st.moveCredit[p.id]?.[m.playerID] ?? m.playerID;
@@ -755,6 +765,40 @@
     return true;
   }
 
+  /// Changes who ran in a courtesy swap, or with `runner` null takes it back so the original player ran.
+  /// The swap's runner is renamed in the plays while they were on base: until they scored, were put out, were
+  /// replaced by another courtesy runner, the inning ended, or they came up to bat themselves.
+  function editCourtesyRunner(g, swapID, runner) {
+    const swaps = g.courtesySwaps || [];
+    const sw = swaps.find(x => x.id === swapID);
+    if (!sw) return false;
+    const oldID = sw.runnerID, newID = runner ? runner.id : sw.originalID;
+    if (newID === oldID) return false;
+    if (runner && !player(g, runner.id)) (g.extras ||= []).push(runner);
+    const inning = state(g, sw.beforePlay).inning;
+    for (let i = sw.beforePlay; i < g.plays.length; i++) {
+      const p = g.plays[i];
+      if (p.inning !== inning || p.batterID === oldID) break;
+      const next = swaps.find(x => x !== sw && x.beforePlay === i && x.originalID === oldID);
+      if (next && i > sw.beforePlay) { next.originalID = newID; break; }
+      let left = false;
+      for (const m of p.runners) {
+        if (m.playerID !== oldID) continue;
+        m.playerID = newID;
+        if (m.to === HOME || m.to === OUT) left = true;
+      }
+      if (left) break;
+    }
+    // Another courtesy runner put in for them after the last play.
+    for (const x of swaps) if (x !== sw && x.beforePlay > sw.beforePlay && x.originalID === oldID && x.beforePlay === g.plays.length) x.originalID = newID;
+    if (runner) sw.runnerID = newID;
+    else swaps.splice(swaps.indexOf(sw), 1);
+    // Someone who only ever came in as that courtesy runner leaves the game's list.
+    const used = id => swaps.some(x => x.runnerID === id || x.originalID === id) || g.plays.some(p => p.batterID === id || p.runners.some(m => m.playerID === id));
+    if (!used(oldID)) g.extras = (g.extras || []).filter(p => p.id !== oldID);
+    return true;
+  }
+
   /// Undo the most recent action: a courtesy runner put in after the last play, an early inning end, or the last play.
   function undo(g) {
     const swaps = g.courtesySwaps || [];
@@ -777,7 +821,7 @@
   const api = {
     OUT, FIRST, SECOND, THIRD, HOME, BASES, ON_BASE, BASE_LABEL,
     RESULTS, RESULT_ORDER, OUT_TYPES, OUT_TYPE_ORDER, FIELDERS, FIELDER_ORDER, DEFAULT_RULES,
-    newID, statKey, isHit, isAtBat, batterIsOut, isStrikeout, totalBases, resultCode, resultTitle, buttonTitle, defaultBatterBase,
+    newID, statKey, isHit, isAtBat, isSkip, batterIsOut, editCourtesyRunner, isStrikeout, totalBases, resultCode, resultTitle, buttonTitle, defaultBatterBase,
     pointX, pointY, fromXY, isFair, isOverFence, suggestedFielder,
     runsScored, outsRecorded, normalizedForSacrifice, bookCode, scorebookMark, cornerMark, circledLabel, detailTitle, sprayKind,
     allPlayers, player, nameFor, currentID, state, renumberInnings, deletePlay, canEndInning, opponentTotal, outcome, codes,

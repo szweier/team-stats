@@ -493,7 +493,7 @@
   // Both go to the database (reports/, errors/), readable only in the Firebase console, so nobody's email is
   // shown to the whole site. Errors are sent automatically: each message once a visit, at most 5 a visit.
 
-  const VERSION = "v33";   // the cache name in sw.js; bump both together
+  const VERSION = "v36";   // the cache name in sw.js; bump both together
   const recentErrors = [];  // this visit's errors, also sent with a problem report
   let errorsSent = 0;
   const pageInfo = () => ({ page: location.hash || "#/", team: state.key || "", version: VERSION,
@@ -2050,14 +2050,38 @@
   }
 
   /// Right after a game ends (from the scorer): if it was the day's last, offer to name the Player of the Day.
+  const samePerson = (a, pick) => (a.member && pick.member ? a.member === pick.member : a.name === pick.name);
+  const sameAward = (a, pick) => samePerson(a, pick) && a.line === pick.line;
+  const awardText = a => `${awardName(a)} (${a.line})`;
+
+  /// After stats change: the same winner just gets their new line; a different one is asked about first.
+  /// True if it was saved.
+  async function updateAward(a, pick) {
+    if (samePerson(a, pick)) {
+      await saveAward(a.date, pick);
+      state.flash = `🏆 Still Player of the Day, with the updated stats: ${awardText(pick)}`;
+      return true;
+    }
+    if (!confirm(`The stats for ${fmtDate(a.date)} changed. Update the Player of the Day to ${awardText(pick)}? It was ${awardText(a)}.`)) return false;
+    await saveAward(a.date, pick);
+    state.flash = `🏆 Player of the Day updated: ${awardText(pick)}`;
+    return true;
+  }
+
   async function offerPlayerOfTheDay(ended) {
     try {
       const date = ended?.date;
-      if (!date || (state.awards || []).some(a => a.date === date) || !dayIsDone(date, ended.id)) return;
+      if (!date || !dayIsDone(date, ended.id)) return;
       const named = withMemberNames([ended], state.members || [], state.links || [], state.names || [])[0];
       const day = [...state.games.filter(g => g.date === date && g.id !== ended.id), named];
       const pick = playerOfTheDay(day);
       if (!pick) return;
+      // Already named (the game was reopened and edited): offer to update it only if the edit changed it.
+      const had = (state.awards || []).find(a => a.date === date);
+      if (had) {
+        if (!sameAward(had, pick) && await updateAward(had, pick)) await refreshNow();
+        return;
+      }
       if (!confirm(`That was the last game on ${fmtDate(date)}. Name a Player of the Day from the day's stats?`)) return;
       await saveAward(date, pick);
       state.flash = `🏆 Player of the Day: ${awardName(pick)} (${pick.line})`;
@@ -2081,7 +2105,17 @@
   /// On a finished game's page: the day's award, or (for scorers, on the day's last game) a way to name one.
   function awardSection(g) {
     const a = (state.awards || []).find(x => x.date === g.date);
-    if (a) return awardCard(a);
+    if (a) {
+      // After fixing a game's stats, scorers can work it out again from the latest numbers.
+      return [awardCard(a), scorer?.isScorerHere() ? h("div", { class: "form-actions start award-tools" },
+        h("button", { class: "btn small ghost", type: "button", onclick: action(async () => {
+          await load(state.key);   // the latest stats, including edits just made
+          const pick = playerOfTheDay(state.games.filter(x => x.date === g.date));
+          if (!pick) throw new Error("Nobody batted that day, so there's no one to name.");
+          if (sameAward(a, pick)) { alert(`${awardText(a)} is still the Player of the Day.`); return; }
+          await updateAward(a, pick);
+        }, { after: refreshNow }) }, "↻ Recalculate Player of the Day")) : null];
+    }
     if (!g.isFinal || !scorer?.isScorerHere() || !dayIsDone(g.date)) return null;
     return h("div", { class: "form-actions start" }, h("button", { class: "btn small ghost", type: "button", onclick: action(async () => {
       const pick = playerOfTheDay(state.games.filter(x => x.date === g.date));

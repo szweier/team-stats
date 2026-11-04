@@ -308,6 +308,7 @@ window.StatScorer = function (ctx) {
 
   /// The runners (and batter) a play moves, for the animation.
   function moversFor(g, play) {
+    if (E.isSkip(play.result)) return [];
     const name = id => E.nameFor(g, id);
     const movers = (play.runners || []).map(m => ({ name: name(m.playerID), start: m.from, end: m.to === OUT ? m.from + 0.5 : baseIndex(m.to), to: m.to }));
     if (!["strikeoutLooking", "strikeoutSwinging", "strikeoutFoul", "homeRunOut"].includes(play.result)) {
@@ -1161,8 +1162,10 @@ window.StatScorer = function (ctx) {
     const grid = (...kids) => h("div", { class: "btn-grid" }, ...kids);
     switch (ui.step) {
       case "main":
-        return grid(btn("Strikeout", () => { ui.spot = null; ui.step = "strikeout"; render(); }, "big kout"),
-          btn("Walk", () => { ui.spot = null; choose("walk"); }, "big walk"));
+        return h("div", { class: "btn-stack" },
+          grid(btn("Strikeout", () => { ui.spot = null; ui.step = "strikeout"; render(); }, "big kout"),
+            btn("Walk", () => { ui.spot = null; choose("walk"); }, "big walk")),
+          btn(`${g.lineup[s.batterIndex]?.name || "Batter"} Not Here · Skip Turn`, () => { ui.spot = null; ui.sheet = { type: "skip" }; render(); }, "soft"));
       case "inPlay":
         return h("div", { class: "btn-stack" },
           grid(btn("Hit", () => { ui.step = "hit"; render(); }, "big hit"), btn("Out", () => { ui.step = "out"; render(); }, "big out")),
@@ -1313,6 +1316,7 @@ window.StatScorer = function (ctx) {
       case "happened": return happenedSheet(rec, g, s, sh);
       case "edit": return editSheet(rec, g, sh);
       case "courtesy": return courtesySheet(rec, g, s, sh.base);
+      case "courtesyEdit": return courtesyEditSheet(rec, g, sh);
       case "opponent": return opponentSheet(rec, g, s);
       case "pitching": return pitchingSheet(rec, g, s, sh);
       case "menu": return menuSheet(rec, g);
@@ -1321,6 +1325,7 @@ window.StatScorer = function (ctx) {
       case "details": return detailsSheet(rec, g, sh);
       case "rules": return rulesSheet();
       case "end": return endSheet(rec, g);
+      case "skip": return skipSheet(rec, g, s);
       case "sync": return syncSheet(rec);
     }
     return null;
@@ -1380,7 +1385,8 @@ window.StatScorer = function (ctx) {
   }
 
   function editSheet(rec, g, sh) {
-    const hasBall = !["walk", "strikeoutLooking", "strikeoutSwinging", "strikeoutFoul"].includes(sh.result);
+    const skip = E.isSkip(sh.result);
+    const hasBall = !skip && !["walk", "strikeoutLooking", "strikeoutSwinging", "strikeoutFoul"].includes(sh.result);
     const hasOutDetail = sh.result === "out" || sh.result === "sacrificeFly";
     const resetOutcome = () => {
       if (sh.result === "sacrificeFly") sh.outType = "fly";
@@ -1399,6 +1405,14 @@ window.StatScorer = function (ctx) {
       h("option", { value: "" }, "Fielder: —"), E.FIELDER_ORDER.map(f => h("option", { value: f }, `Fielder: ${f}`)));
     fielder.value = sh.fielder || "";
     const save = async () => {
+      if (skip) {
+        // Runners stay where they were; the batter never came up.
+        const d = E.defaultPlay(g, sh.result, sh.st, sh.batter.id, null, null, null, rules());
+        const saved = { ...d, id: sh.existing.id, inning: sh.st.inning, endsInning: !!sh.existing.endsInning };
+        ui.sheet = null;
+        await change(rec, x => { if (sh.index >= x.plays.length) return false; x.plays[sh.index] = saved; E.renumberInnings(x); });
+        return render();
+      }
       if (E.Outcome.problem(sh.o)) return;
       const play = { id: sh.existing.id, inning: sh.st.inning, batterID: sh.batter.id, result: sh.result, batterTo: sh.existing.batterTo,
         runners: [], rbi: 0, endsInning: !!sh.existing.endsInning,
@@ -1420,9 +1434,10 @@ window.StatScorer = function (ctx) {
         } }),
         sh.location ? btn("Clear Location", () => { sh.location = null; render(); }, "soft small") : h("div", { class: "muted small" }, "Tap the field to place the ball for the spray chart.")] : null,
       hasOutDetail ? h("div", { class: "row2" }, sh.result === "out" ? outType : h("span"), fielder) : null,
-      h("div", { class: "k" }, "Where did everyone end up?"),
-      outcomeRows(sh.o),
-      btn("Save Play", save, "big save", { disabled: E.Outcome.problem(sh.o) != null || null }),
+      skip ? h("p", { class: "muted small" }, "Skipped turn: the batter wasn't there, so runners stay where they were.") : [
+        h("div", { class: "k" }, "Where did everyone end up?"),
+        outcomeRows(sh.o)],
+      btn("Save Play", save, "big save", { disabled: (!skip && E.Outcome.problem(sh.o) != null) || null }),
       sh.confirmDelete
         ? h("div", { class: "card pad" }, h("p", { style: "margin-top:0" }, "Delete this play? Plays after it stay put; any that no longer fit are flagged for review."),
           h("div", { class: "form-actions start" },
@@ -1454,6 +1469,36 @@ window.StatScorer = function (ctx) {
         h("input", { type: "text", placeholder: "Name", maxlength: "80", list: namesList(), oninput: e => { typed = e.target.value; },
           onkeydown: e => { if (e.key === "Enter" && typed.trim()) pick(linkedPlayer(rec, typed)); } }),
         btn("Use", () => { if (typed.trim()) pick(linkedPlayer(rec, typed)); }, "soft")),
+    ]);
+  }
+
+  /// Fixing a courtesy runner after the fact: someone else ran, or nobody did (the player ran themselves).
+  function courtesyEditSheet(rec, g, sh) {
+    const sw = (g.courtesySwaps || []).find(x => x.id === sh.swapID);
+    if (!sw) { ui.sheet = null; return null; }
+    const st = E.state(g, sw.beforePlay);           // the bases when they came in (this swap included)
+    const original = E.nameFor(g, sw.originalID), current = E.nameFor(g, sw.runnerID);
+    const onBase = new Set(Object.values(st.bases));
+    const batterID = g.lineup[st.batterIndex]?.id;
+    const inGame = [...g.lineup, ...(g.extras || [])].filter(p => !onBase.has(p.id) && p.id !== batterID && p.id !== sw.originalID);
+    const inGameMembers = new Set(E.allPlayers(g).map(p => p.member).filter(Boolean));
+    const teammates = members(rec).filter(m => !inGameMembers.has(m.uid));
+    const back = () => { ui.sheet = { type: "box" }; render(); };
+    const set = async runner => { await change(rec, x => E.editCourtesyRunner(x, sw.id, runner)); back(); };
+    let typed = "";
+    return sheet("Change Courtesy Runner", [
+      h("p", null, h("b", null, current), ` ran for ${original} on ${E.BASE_LABEL[sw.base]} in the ${ordinal(st.inning)}. Pick who actually ran; the run still counts for ${original}.`),
+      h("div", { class: "k" }, "In this game"),
+      h("div", { class: "pick-list" }, inGame.map(p => btn(p.name + (p.id === sw.runnerID ? " ✓" : ""), () => set(p), p.id === sw.runnerID ? "soft on" : "soft"))),
+      teammates.length ? [h("div", { class: "k" }, "Other teammates"),
+        h("div", { class: "pick-list" }, teammates.map(m => btn(m.name, () => set({ id: E.newID(), name: m.name, member: m.uid }), "soft")))] : null,
+      h("div", { class: "k" }, "Someone else"),
+      h("div", { class: "pin-search" },
+        h("input", { type: "text", placeholder: "Name", maxlength: "80", list: namesList(), oninput: e => { typed = e.target.value; },
+          onkeydown: e => { if (e.key === "Enter" && typed.trim()) set(linkedPlayer(rec, typed)); } }),
+        btn("Use", () => { if (typed.trim()) set(linkedPlayer(rec, typed)); }, "soft")),
+      btn(`No Courtesy Runner · ${original} Ran`, () => set(null), "soft danger"),
+      btn("Back to Plays", back, "soft"),
     ]);
   }
 
@@ -1598,6 +1643,19 @@ window.StatScorer = function (ctx) {
       }, "menu-item danger") : null));
   }
 
+  /// The batter isn't at the field (yet): their turn passes to the next spot. They bat in their usual spot
+  /// once they're there; nothing else changes.
+  function skipSheet(rec, g, s) {
+    const name = g.lineup[s.batterIndex]?.name || "This batter";
+    const skip = result => { ui.sheet = null; choosePlay(rec, g, s, result, null, null); };
+    return sheet(`${name} isn't here?`, [
+      h("p", null, `Their turn passes to the next batter. When ${name} gets here, they bat in their usual spot the next time it comes around. A skipped turn isn't a plate appearance, so it doesn't change their stats.`),
+      btn("Skip Turn", () => skip("skipped"), "big"),
+      btn("Skip Turn · Counts as an Out", () => skip("skippedOut"), "soft"),
+      h("p", { class: "muted small" }, "Count it as an out only if your league calls an empty spot in the order an automatic out. If they've left for good, take them out of the order with Lineup in the ••• menu instead."),
+    ]);
+  }
+
   function endSheet(rec, g) {
     return sheet("End this game?", [
       h("p", null, "Make sure the opponent's runs are entered. You can reopen the game later."),
@@ -1619,6 +1677,15 @@ window.StatScorer = function (ctx) {
       .map(l => derive(ctxLine(l)));
     const byInning = new Map();
     g.plays.forEach((p, i) => byInning.set(p.inning, [...(byInning.get(p.inning) || []), [p, i]]));
+    // Courtesy runners show just before the play they came in ahead of (or after the last play).
+    const swapsBefore = i => (g.courtesySwaps || []).filter(x => x.beforePlay === i);
+    const swapRow = x => h("button", { type: "button", class: "play play-btn courtesy-row", onclick: () => { ui.sheet = { type: "courtesyEdit", swapID: x.id }; render(); } },
+      h("div", null, `🏃 ${E.nameFor(g, x.runnerID)} ran for ${E.nameFor(g, x.originalID)} on ${E.BASE_LABEL[x.base]}`),
+      h("div", { class: "r" }, "Courtesy runner · tap to change"));
+    if (swapsBefore(g.plays.length).length) {
+      const last = s.inning;
+      byInning.set(last, [...(byInning.get(last) || []), [null, g.plays.length]]);
+    }
     return sheet("Box Score & Plays", [
       h("div", { class: "board game-head" }, scorePair(g, s)),
       lineScore(E.publishedGame(g)),
@@ -1630,9 +1697,9 @@ window.StatScorer = function (ctx) {
       h("div", { class: "k" }, "Plays · tap to edit"),
       h("div", { class: "card pbp" }, [...byInning.entries()].map(([inn, plays]) => [
         h("div", { class: "inn" }, `${ordinal(inn)} inning`),
-        plays.map(([p, i]) => h("button", { type: "button", class: `play play-btn${s.needsReview.has(p.id) ? " review" : ""}`, onclick: () => openEdit(rec, i) },
+        plays.map(([p, i]) => [swapsBefore(i).map(swapRow), p ? h("button", { type: "button", class: `play play-btn${s.needsReview.has(p.id) ? " review" : ""}`, onclick: () => openEdit(rec, i) },
           h("div", null, s.needsReview.has(p.id) ? "⚠ " : "", E.describe(g, p)),
-          E.runnerSummary(g, p) ? h("div", { class: "r" }, E.runnerSummary(g, p)) : null)),
+          E.runnerSummary(g, p) ? h("div", { class: "r" }, E.runnerSummary(g, p)) : null) : null]),
       ])),
       s.needsReview.size ? h("div", { class: "muted small" }, "⚠ marks plays whose runners no longer match the bases (usually after an earlier play was edited). Open them to fix where everyone ended up.") : null,
     ], { wide: true });
