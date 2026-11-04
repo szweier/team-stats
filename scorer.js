@@ -368,9 +368,10 @@ window.StatScorer = function (ctx) {
   // Demo: add &keeper to the address to see what a Scorekeeper sees.
   const demoKeeper = () => DEMO && new URLSearchParams(location.search).has("keeper");
   /// Managers (and the app's scorers) set lineups and start any game; Scorekeepers only keep the book.
-  const isManagerHere = () => (DEMO ? !demoKeeper() : ctx.isLead() || (state.team?.editors || []).includes(me()));
-  const isScorerHere = () => DEMO || ctx.isLead() ||
-    ((state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me()));
+  // Nobody scores or edits games on an archived (read-only) team.
+  const isManagerHere = () => !state.team?.archived && (DEMO ? !demoKeeper() : ctx.isLead() || (state.team?.editors || []).includes(me()));
+  const isScorerHere = () => !state.team?.archived && (DEMO || ctx.isLead() ||
+    ((state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me())));
 
   // ---------- Games tab: scoring list ----------
 

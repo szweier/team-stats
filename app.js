@@ -493,7 +493,7 @@
   // Both go to the database (reports/, errors/), readable only in the Firebase console, so nobody's email is
   // shown to the whole site. Errors are sent automatically: each message once a visit, at most 5 a visit.
 
-  const VERSION = "v36";   // the cache name in sw.js; bump both together
+  const VERSION = "v37";   // the cache name in sw.js; bump both together
   const recentErrors = [];  // this visit's errors, also sent with a problem report
   let errorsSent = 0;
   const pageInfo = () => ({ page: location.hash || "#/", team: state.key || "", version: VERSION,
@@ -566,13 +566,17 @@
 
   const me = () => (DEMO ? "demo-me" : session?.uid);
   /// Admins: full control (stored as `managers`, so existing teams and the iOS app carry on unchanged).
-  const isManager = () => DEMO || (state.team?.managers || []).includes(me());
+  /// An archived team is read-only: nobody gets editing controls until an admin unarchives it.
+  const archived = () => !!state.team?.archived;
+  /// The team's admins, archived or not (they archive and unarchive it).
+  const runsTeam = () => DEMO || (state.team?.managers || []).includes(me());
+  const isManager = () => !archived() && runsTeam();
   const isAdmin = isManager;
   /// Managers (`leads`): the schedule, lineups and keeping score. Admins can do all of that too.
   const isLead = () => isAdmin() || ((state.team?.leads || []).includes(me()) && (state.team?.members || []).includes(me()));
   /// Managers, plus members a manager has let add and edit the schedule.
-  const isScorer = () => (state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me());
-  const canSchedule = () => isLead() || (state.team?.schedulers || []).includes(me());
+  const isScorer = () => !archived() && (state.team?.scorers || []).includes(me()) && (state.team?.members || []).includes(me());
+  const canSchedule = () => isLead() || (!archived() && (state.team?.schedulers || []).includes(me()));
 
   async function loadProfile() {
     if (DEMO) { state.profile = { name: "You", teams: {} }; return; }
@@ -586,13 +590,15 @@
       const rows = await fs("POST", `${DOCS}:runQuery`, { body: { structuredQuery: {
         from: [{ collectionId: "teams" }],
         where: { fieldFilter: { field: { fieldPath: "members" }, op: "ARRAY_CONTAINS", value: { stringValue: me() } } },
-        select: { fields: [{ fieldPath: "name" }] },
+        select: { fields: [{ fieldPath: "name" }, { fieldPath: "archived" }] },
       } } });
       const onTeams = new Set();
+      state.profile.archived = {};
       for (const row of rows || []) {
         if (!row.document) continue;
         const id = idOf(row.document), name = fieldsOf(row.document).name || "Team";
         onTeams.add(id);
+        if (fieldsOf(row.document).archived) state.profile.archived[id] = true;
         if (state.profile.teams[id] !== name) {
           state.profile.teams[id] = name;
           addToMyTeams(id, name).catch(() => {});
@@ -824,6 +830,12 @@
     await setDoc(`invites/${code}`, { teamId, teamName: name, createdAt: now() }, { exists: false });
     await setDoc(`teams/${teamId}/private/settings`, { inviteCode: code });
     return teamId;
+  }
+
+  async function setArchived(on) {
+    await setDoc(`teams/${state.key}`, { archived: on, archivedAt: on ? now() : null, updatedAt: now() },
+      { mask: ["archived", "archivedAt", "updatedAt"], exists: true });
+    state.profile.archived = { ...(state.profile.archived || {}), [state.key]: on };
   }
 
   async function newInviteLink() {
@@ -1160,17 +1172,24 @@
 
   function homeView() {
     applyTheme(null);
-    const teams = Object.entries(state.profile.teams || {}).sort((a, b) => a[1].localeCompare(b[1]));
+    const all = Object.entries(state.profile.teams || {}).sort((a, b) => a[1].localeCompare(b[1]));
+    const isArchived = id => !!state.profile.archived?.[id];
+    const teams = all.filter(([id]) => !isArchived(id));
+    const archivedTeams = all.filter(([id]) => isArchived(id));
+    const teamLink = ([id, name]) => h("div", { class: "team-item" }, h("a", { href: `${SITE}?t=${id}` }, name || "Team"));
     const code = h("input", { type: "text", placeholder: "ABCD-EFGH-JKLM", required: true, "aria-label": "Scorer code", autocapitalize: "characters" });
     const teamName = h("input", { type: "text", placeholder: "Team name", required: true, maxlength: "80", "aria-label": "Team name", autocapitalize: "words" });
     app.replaceChildren(panel(
       h("h1", null, state.profile.name ? `Hi, ${state.profile.name.split(" ")[0]}` : "Your teams"),
       flashMessage(),
       teams.length
-        ? [h("p", null, "Your teams"), h("div", { class: "team-list" }, teams.map(([id, name]) =>
-            h("div", { class: "team-item" }, h("a", { href: `${SITE}?t=${id}` }, name || "Team"))))]
+        ? [h("p", null, "Your teams"), h("div", { class: "team-list" }, teams.map(teamLink))]
+        : archivedTeams.length ? h("p", null, "All your teams are archived.")
         : h("p", null, `You're not on a team yet. Ask your team's admin to send you the team's invite link, then open it to join${state.canCreateTeams ? ", or start your own team" : ""}.`),
-      state.canCreateTeams ? h("details", { class: "fold", open: !teams.length || null }, h("summary", null, "Start a new team"),
+      // Archived teams: read-only, tucked away but still there for their stats.
+      archivedTeams.length ? h("details", { class: "fold archived-teams" }, h("summary", null, `Archived teams (${archivedTeams.length})`),
+        h("div", { class: "team-list archived" }, archivedTeams.map(teamLink))) : null,
+      state.canCreateTeams ? h("details", { class: "fold", open: !all.length || null }, h("summary", null, "Start a new team"),
         h("p", { class: "or" }, "You'll be its admin: invite your teammates with its link, set the schedule and keep score here."),
         h("form", { onsubmit: e => { e.preventDefault(); action(async () => { const id = await createTeam(teamName.value); location.href = `${SITE}?t=${id}#/team`; }, { after: () => {} })(e); } },
           teamName, h("button", { class: "btn", type: "submit" }, "Create Team"))) : null,
@@ -1258,6 +1277,9 @@
           h("span", { class: "spacer" }),
           DEMO ? null : h("a", { class: "teams-link", href: SITE }, "My Teams")))),
       h("main", { class: "wrap" }, flashMessage(),
+        archived() ? h("div", { class: "notice archived-note" }, h("b", null, "Archived · read-only. "),
+          "Its games, stats and schedule are here to look at; nothing can be changed.",
+          runsTeam() ? [" ", h("a", { href: "#/team" }, "Unarchive on the Team tab")] : null) : null,
         state.offline ? h("div", { class: "notice" }, "You're offline. Games saved on this phone are here; they upload when you're back online.") : null,
         content,
         h("div", { class: "foot" },
@@ -1414,7 +1436,7 @@
               h("a", { class: "map-link", href, target: "_blank", rel: "noopener" }, label)))) : null,
           g.notes ? h("div", { class: "notes" }, g.notes) : null,
           result)),
-      isPast ? null : h("div", { class: "answer" },
+      isPast || archived() ? null : h("div", { class: "answer" },
         h("span", { class: "answer-label" }, "Can you make it?"),
         h("div", { class: "seg", role: "group", "aria-label": "Your availability" }, ANSWERS.map(([value, label]) =>
           h("button", {
@@ -1950,6 +1972,17 @@
           h("div", { class: "codebox big" }, showCode(state.settings.scorerCode)),
           h("div", { class: "form-actions start" }, copyButton(showCode(state.settings.scorerCode), "Copy Code"))),
       ] : null,
+      runsTeam() && !DEMO ? [
+        h("h2", { class: "section" }, "Archive"),
+        h("div", { class: "card pad" },
+          h("p", { class: "muted small", style: "margin-top:0" }, archived()
+            ? "This team is archived: it's read-only for everyone, and moved under Archived teams on everyone's My Teams. Unarchive it to use it again."
+            : "Done with this team (an old season, a team that folded)? Archiving makes it read-only and moves it under Archived teams on My Teams. Its games and stats stay, and you can unarchive it any time."),
+          h("div", { class: "form-actions start" }, h("button", { class: "btn small ghost", type: "button", onclick: e => {
+            if (archived() || confirm(`Archive ${state.team.name}? Nobody can change its schedule, games or players until it's unarchived. Its stats stay viewable.`)) {
+              action(() => setArchived(!archived()), { after: refreshNow })(e);
+            }
+          } }, archived() ? "Unarchive Team" : "Archive Team")))] : null,
       h("h2", { class: "section" }, "Team"),
       h("div", { class: "card pad team-actions" },
         manager ? h("button", { class: "btn small ghost", type: "button", onclick: e => {
@@ -2002,7 +2035,7 @@
 
   /// "Keep Score" for managers and scorers, with anything still waiting to upload from this phone.
   function keepScoreBar() {
-    if (!scorer || !(scorer.isScorerHere() || scorer.recsForTeam(state.key).length)) return null;
+    if (!scorer || archived() || !(scorer.isScorerHere() || scorer.recsForTeam(state.key).length)) return null;
     const waiting = scorer.waiting(state.key);
     return h("a", { class: "card keep-score", href: "#/score" },
       h("span", { class: "ks-icon", "aria-hidden": "true" }, "✎"),
